@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	EpisodeSteps     = 96    // 24 hours × 15-min intervals
+	EpisodeSteps     = 288    // 72 hours × 15-min intervals
 	StepDurationHrs  = 0.25  // each step = 15 minutes = 0.25 h
 	MaxBuildings     = 3
 	DefaultSetpoint  = 21.0  // °C comfortable indoor temp
@@ -219,9 +219,9 @@ func (e *Environment) GetState() StateResponse {
 		buildings[i] = pub
 	}
 
-	priceCurve := make([]float64, 24)
-	carbonCurve := make([]float64, 24)
-	for h := 0; h < 24; h++ {
+	priceCurve := make([]float64, EpisodeSteps/4)
+	carbonCurve := make([]float64, EpisodeSteps/4)
+	for h := 0; h < EpisodeSteps/4; h++ {
 		stepIdx := h * 4
 		if stepIdx < EpisodeSteps {
 			priceCurve[h] = e.PriceCurve[stepIdx]

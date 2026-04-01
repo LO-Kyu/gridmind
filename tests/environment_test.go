@@ -57,19 +57,19 @@ func TestStepAdvancesState(t *testing.T) {
 	}
 }
 
-// TestEpisodeLengthIs96 verifies the episode terminates at step 96.
-func TestEpisodeLengthIs96(t *testing.T) {
+// TestEpisodeLengthIs288 verifies the episode terminates at step 288.
+func TestEpisodeLengthIs288(t *testing.T) {
 	e := env.NewEnvironment()
 	var seed int64 = 99
 	e.Reset(env.ResetRequest{Seed: &seed, TaskID: 1, NumBuildings: 1})
 
 	action := []env.ActionModel{{HVACPowerLevel: 0.5}}
 	var lastDone bool
-	for i := 0; i < 96; i++ {
+	for i := 0; i < 288; i++ {
 		_, lastDone = e.Step(action)
 	}
 	if !lastDone {
-		t.Errorf("episode should be done after 96 steps")
+		t.Errorf("episode should be done after 288 steps")
 	}
 }
 
@@ -162,7 +162,7 @@ func TestGraderTask1ScoreRange(t *testing.T) {
 	e.Reset(env.ResetRequest{Seed: &seed, TaskID: 1})
 
 	action := []env.ActionModel{{HVACPowerLevel: 0.3}}
-	for i := 0; i < 96; i++ {
+	for i := 0; i < 288; i++ {
 		e.Step(action)
 	}
 

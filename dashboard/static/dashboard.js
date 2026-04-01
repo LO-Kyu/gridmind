@@ -7,7 +7,7 @@
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const POLL_MS        = 500;
-const HISTORY_LEN    = 96;   // 96 steps = full episode
+const HISTORY_LEN    = 288;   // 288 steps = full episode
 const API_BASE       = '/api';
 const TASK_NAMES = {
   1: 'Task 1 — Cost Minimization (Easy)',
@@ -95,8 +95,8 @@ function makeBarChart(id, labels, datasets) {
 }
 
 // ── Initialise all charts ─────────────────────────────────────────────────────
-const emptyLabels = Array.from({ length: 24 }, (_, i) => `${i}h`);
-const emptyData   = Array(24).fill(null);
+const emptyLabels = Array.from({ length: 72 }, (_, i) => `${i}h`);
+const emptyData   = Array(72).fill(null);
 
 // 1. Price curve
 const priceChart = makeLineChart('chart-price',
@@ -258,16 +258,13 @@ const carbonChart = makeLineChart('chart-carbon',
   { yAxis: { title: { display: true, text: 'gCO₂/kWh' } } }
 );
 
-// 8. Reward components bar
-const rewardChart = makeBarChart('chart-reward',
+// 8. Reward timeline curve
+const rewardChart = makeLineChart('chart-reward',
   [],
   [
-    { label: 'Cost Savings',   data: [], backgroundColor: rgba(COLORS.green, 0.8) },
-    { label: 'Temp Constraint',data: [], backgroundColor: rgba(COLORS.cyan, 0.8) },
-    { label: 'Grid Response',  data: [], backgroundColor: rgba(COLORS.blue, 0.8) },
-    { label: 'Efficiency',     data: [], backgroundColor: rgba(COLORS.purple, 0.7) },
-    { label: 'Penalties',      data: [], backgroundColor: rgba(COLORS.red, 0.8) },
-  ]
+    { label: 'Step Reward',   data: [], borderColor: COLORS.green, backgroundColor: rgba(COLORS.green, 0.1), borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 },
+  ],
+  { yAxis: { title: { display: true, text: 'Reward' } } }
 );
 
 // ── Stress meter bars ────────────────────────────────────────────────────────
@@ -309,7 +306,7 @@ function renderGantt(jobs, currentStep) {
     wrap.innerHTML = '<div style="color:var(--text-dim);font-size:0.8rem">No batch jobs in this episode.</div>';
     return;
   }
-  const totalSlots = 96;
+  const totalSlots = 288;
   wrap.innerHTML = '';
   jobs.forEach(job => {
     const row = document.createElement('div');
@@ -419,7 +416,7 @@ async function fetchAndUpdate() {
     const hourOfDay = b.hour_of_day || 0;
 
     // ── Header ──
-    document.getElementById('ep-step').textContent = `ep:${state.episode} step:${step}/95`;
+    document.getElementById('ep-step').textContent = `ep:${state.episode} step:${step}/287`;
     document.getElementById('task-badge').textContent = TASK_NAMES[state.task_id] || 'Task 1';
 
     // ── KPIs ──
@@ -447,21 +444,21 @@ async function fetchAndUpdate() {
     document.getElementById('kpi-storage').textContent = `${(b.thermal_storage_level * 100).toFixed(1)}`;
 
     // ── Price curve chart ──
-    if (state.price_curve_24h && state.price_curve_24h.length === 24) {
-      const labels = Array.from({ length: 24 }, (_, i) => `${i}:00`);
+    if (state.price_curve_episode && state.price_curve_episode.length === 72) {
+      const labels = Array.from({ length: 72 }, (_, i) => `${i}:00`);
       priceChart.data.labels = labels;
-      priceChart.data.datasets[0].data = state.price_curve_24h;
+      priceChart.data.datasets[0].data = state.price_curve_episode;
       // Current position marker
-      const marker = Array(24).fill(null);
-      marker[hourOfDay] = state.price_curve_24h[hourOfDay];
+      const marker = Array(72).fill(null);
+      marker[Math.floor(step / 4)] = state.price_curve_episode[Math.floor(step / 4)];
       priceChart.data.datasets[1].data = marker;
       priceChart.update('none');
     }
 
     // ── Carbon curve ──
-    if (state.carbon_curve_24h && state.carbon_curve_24h.length === 24) {
-      carbonChart.data.labels = Array.from({ length: 24 }, (_, i) => `${i}:00`);
-      carbonChart.data.datasets[0].data = state.carbon_curve_24h;
+    if (state.carbon_curve_episode && state.carbon_curve_episode.length === 72) {
+      carbonChart.data.labels = Array.from({ length: 72 }, (_, i) => `${i}:00`);
+      carbonChart.data.datasets[0].data = state.carbon_curve_episode;
       carbonChart.update('none');
     }
 
@@ -530,16 +527,9 @@ async function fetchAndUpdate() {
         stressChart.data.datasets[0].data = b.reward_history.map(r => Math.max(0, r.grid_response || 0));
         stressChart.update('none');
 
-        // Reward breakdown chart (last 20 steps)
-        const recent = b.reward_history.slice(-20);
-        rewardChart.data.labels = Array.from({ length: recent.length }, (_, i) => n - recent.length + i);
-        rewardChart.data.datasets[0].data = recent.map(r => Math.max(0, r.cost_savings || 0));
-        rewardChart.data.datasets[1].data = recent.map(r => Math.max(0, r.temp_constraint || 0));
-        rewardChart.data.datasets[2].data = recent.map(r => Math.max(0, r.grid_response || 0));
-        rewardChart.data.datasets[3].data = recent.map(r => Math.max(0, r.efficiency_bonus || 0));
-        rewardChart.data.datasets[4].data = recent.map(r =>
-          Math.abs(r.deadline_penalty || 0) + Math.abs(r.stability_penalty || 0)
-        );
+        // Total reward timeline chart (full episode)
+        rewardChart.data.labels = Array.from({ length: n }, (_, i) => i);
+        rewardChart.data.datasets[0].data = b.reward_history.map(r => r.total || 0);
         rewardChart.update('none');
 
         // Reward rows (last step)
@@ -578,6 +568,46 @@ async function doReset() {
   btn.textContent = '↺ New Episode';
   btn.disabled = false;
   document.getElementById('grade-result').textContent = '';
+}
+
+let liveSimTimer = null;
+let isLiveSimulating = false;
+
+function toggleLiveSim() {
+  const btn = document.getElementById('btn-live');
+  if (isLiveSimulating) {
+    // Stop live sim
+    clearInterval(liveSimTimer);
+    isLiveSimulating = false;
+    btn.textContent = '▶ Start Live Simulation';
+    btn.style.background = 'var(--accent-green)';
+  } else {
+    // Start live sim
+    isLiveSimulating = true;
+    btn.textContent = '⏸ Pause Live Simulation';
+    btn.style.background = 'var(--accent-amber)';
+    
+    liveSimTimer = setInterval(async () => {
+      // Step the environment automatically with a simple heuristic policy
+      const taskId = parseInt(document.getElementById('task-select').value, 10);
+      try {
+        await fetch(`${API_BASE}/step`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            hvac_power_level: 0.5,
+            thermal_charge_rate: 0.0,
+            batch_job_slot: 0,
+            load_shed_fraction: 0.0,
+            building_id: currentBuilding
+          }),
+        });
+        // fetchAndUpdate() will catch the change via polling
+      } catch (e) {
+        console.error(e);
+      }
+    }, 400); // 400ms per step
+  }
 }
 
 async function doGrade() {

@@ -239,7 +239,9 @@ def run_episode(env_client: GridMindEnvClient, agent: LLMAgent,
     total_steps = 0
     start_time = time.time()
 
-    for _step in range(96):
+    step_resp = {}
+    _step = 0
+    while not step_resp.get("done", False):
         action = agent.choose_action(obs, task_id)
         step_resp = env_client.step(action)
 
@@ -253,9 +255,7 @@ def run_episode(env_client: GridMindEnvClient, agent: LLMAgent,
                   f"stress={obs['grid_stress_signal']:.2f} "
                   f"cost=${obs['cumulative_cost']:.2f} "
                   f"reward={step_resp['reward']:.3f}")
-
-        if step_resp.get("done", False):
-            break
+        _step += 1
 
     elapsed = time.time() - start_time
     grade = env_client.grade()

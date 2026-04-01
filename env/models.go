@@ -124,8 +124,8 @@ type ResetResponse struct {
 // StateResponse is returned from GET /state.
 type StateResponse struct {
 	Buildings    []BuildingStatePublic `json:"buildings"`
-	PriceCurve   []float64            `json:"price_curve_24h"`    // full 24h ToU prices
-	CarbonCurve  []float64            `json:"carbon_curve_24h"`   // full 24h carbon intensities
+	PriceCurve   []float64            `json:"price_curve_episode"`    // full episode ToU prices
+	CarbonCurve  []float64            `json:"carbon_curve_episode"`   // full episode carbon intensities
 	Episode      int                  `json:"episode"`
 	Step         int                  `json:"step"`
 	TaskID       int                  `json:"task_id"`

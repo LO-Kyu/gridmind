@@ -168,8 +168,11 @@ def validate(env_url: str) -> bool:
         post(f"{base}/reset", {"task_id": 1, "seed": 777})
         action = {"hvac_power_level": 0.3, "thermal_charge_rate": 0.0,
                   "batch_job_slot": 0, "load_shed_fraction": 0.0}
-        for _ in range(10):
-            post(f"{base}/step", action)
+        done = False
+        while not done:
+            r2 = post(f"{base}/step", action)
+            if r2.json().get("done"):
+                done = True
         r = get(f"{base}/grade")
         results.append(check("GET /grade returns 200", r.status_code == 200))
         grade = r.json()
@@ -217,9 +220,12 @@ def validate(env_url: str) -> bool:
             # Two different policies
             for a in [0.1, 0.9]:
                 post(f"{base}/reset", {"task_id": 1, "seed": seed})
-                for _ in range(96):
-                    post(f"{base}/step", {"hvac_power_level": a, "thermal_charge_rate": 0,
+                done = False
+                while not done:
+                    r2 = post(f"{base}/step", {"hvac_power_level": a, "thermal_charge_rate": 0,
                                           "batch_job_slot": 0, "load_shed_fraction": 0})
+                    if r2.json().get("done"):
+                        done = True
                 g = requests.get(f"{base}/grade", timeout=10).json()
                 sc = g.get("score", 0)
                 scores_nonzero.append(sc > 0.01)

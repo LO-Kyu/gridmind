@@ -29,7 +29,7 @@ class ObservationModel(BaseModel):
     hour_of_day: int = Field(..., ge=0, le=23, description="Current hour of day (0–23)")
     batch_queue: List[int] = Field(default_factory=list, description="Deadline slots of pending batch jobs")
     cumulative_cost: float = Field(..., ge=0.0, description="Running energy cost this episode ($)")
-    step: int = Field(..., ge=0, description="Current timestep (0–95)")
+    step: int = Field(..., ge=0, description="Current timestep (0–287)")
     building_id: int = Field(default=0, description="Building index in federation")
 
 
@@ -137,8 +137,8 @@ class BuildingStatePublic(BaseModel):
 class StateResponse(BaseModel):
     """Full environment state from GET /state."""
     buildings: List[BuildingStatePublic]
-    price_curve_24h: List[float]
-    carbon_curve_24h: List[float]
+    price_curve_episode: List[float]
+    carbon_curve_episode: List[float]
     episode: int
     step: int
     task_id: int

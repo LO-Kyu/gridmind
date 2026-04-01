@@ -51,10 +51,11 @@ def grade() -> dict:
 def run_full_episode(task_id: int, seed: int, hvac: float = 0.5) -> dict:
     reset(task_id=task_id, seed=seed)
     action = {"hvac_power_level": hvac, "thermal_charge_rate": 0, "batch_job_slot": 0, "load_shed_fraction": 0}
-    for _ in range(96):
+    done = False
+    while not done:
         resp = step(action)
         if resp.get("done"):
-            break
+            done = True
     return grade()
 
 
@@ -86,8 +87,11 @@ class TestTask1:
         """Always shedding 50% should be detected and penalized."""
         reset(task_id=1, seed=10)
         action = {"hvac_power_level": 0.5, "thermal_charge_rate": 0, "batch_job_slot": 0, "load_shed_fraction": 0.5}
-        for _ in range(96):
-            step(action)
+        done = False
+        while not done:
+            resp = step(action)
+            if resp.get("done"):
+                done = True
         g = grade()
         # Score should be reduced OR exploit flagged
         assert g["exploit_detected"] or g["score"] < 0.9
@@ -165,9 +169,10 @@ class TestMultiBuilding:
             {"hvac_power_level": 0.4, "thermal_charge_rate": 0, "batch_job_slot": 0, "load_shed_fraction": 0, "building_id": 0},
             {"hvac_power_level": 0.6, "thermal_charge_rate": 0, "batch_job_slot": 0, "load_shed_fraction": 0, "building_id": 1},
         ]
-        for _ in range(96):
+        done = False
+        while not done:
             r = requests.post(f"{BASE}/step", json=action)
             if r.json()[0].get("done"):
-                break
+                done = True
         g = grade()
         assert 0.0 <= g["score"] <= 1.0
