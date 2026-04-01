@@ -1,0 +1,679 @@
+// Package env implements the GridMind-RL simulation core.
+// It models a multi-building industrial/commercial energy management system
+// with stochastic electricity prices, thermal dynamics, and batch job scheduling.
+package env
+
+import (
+	"math"
+	"math/rand"
+	"sync"
+	"time"
+)
+
+const (
+	EpisodeSteps     = 96    // 24 hours × 15-min intervals
+	StepDurationHrs  = 0.25  // each step = 15 minutes = 0.25 h
+	MaxBuildings     = 3
+	DefaultSetpoint  = 21.0  // °C comfortable indoor temp
+	TMinDefault      = 19.0  // °C lower bound
+	TMaxDefault      = 23.0  // °C upper bound
+	MaxHVACPowerKW   = 50.0  // kW per building
+	MaxStorageKWh    = 100.0 // kWh thermal storage capacity
+	StorageLossRate  = 0.005 // fraction lost per step (thermal dissipation)
+	MaxBatchJobs     = 5     // max concurrent batch jobs per building
+)
+
+// Environment is the thread-safe top-level simulation manager.
+type Environment struct {
+	mu           sync.RWMutex
+	rng          *rand.Rand
+	seed         int64
+	episode      int
+	step         int
+	done         bool
+	taskID       int
+	difficulty   string
+	numBuildings int
+
+	Buildings    []*BuildingState
+	PriceCurve   [EpisodeSteps]float64 // $/kWh for each step
+	CarbonCurve  [EpisodeSteps]float64 // gCO2/kWh for each step
+	Replay       []ReplayEntry
+	LastActions  []ActionModel
+
+	// History for dashboard rendering (per building)
+	TempHistory     [][]float64
+	CostHistory     [][]float64
+	HVACHistory     [][]float64
+	LoadShedHistory [][]float64
+	RewardHistory   [][]RewardComponents
+
+	// Exploit detection counters
+	totalShedSteps       []int    // steps where load_shed > 0.4
+	thermalCycleCounts   []int    // rapid thermal storage reversals
+	prevChargeRates      []float64
+}
+
+// NewEnvironment creates an initialised (but not reset) environment.
+func NewEnvironment() *Environment {
+	seed := time.Now().UnixNano()
+	return &Environment{
+		rng:          rand.New(rand.NewSource(seed)),
+		seed:         seed,
+		taskID:       1,
+		difficulty:   "easy",
+		numBuildings: 1,
+	}
+}
+
+// Reset initializes a new episode. Thread-safe.
+func (e *Environment) Reset(req ResetRequest) ResetResponse {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Apply seed
+	if req.Seed != nil {
+		e.seed = *req.Seed
+	} else {
+		e.seed = time.Now().UnixNano()
+	}
+	e.rng = rand.New(rand.NewSource(e.seed))
+
+	// Apply task and difficulty
+	e.taskID = req.TaskID
+	if e.taskID < 1 || e.taskID > 3 {
+		e.taskID = 1
+	}
+	e.difficulty = req.Difficulty
+	if e.difficulty == "" {
+		switch e.taskID {
+		case 1:
+			e.difficulty = "easy"
+		case 2:
+			e.difficulty = "medium"
+		case 3:
+			e.difficulty = "hard"
+		}
+	}
+
+	// Number of buildings (federation)
+	e.numBuildings = req.NumBuildings
+	if e.numBuildings < 1 {
+		e.numBuildings = 1
+	}
+	if e.numBuildings > MaxBuildings {
+		e.numBuildings = MaxBuildings
+	}
+
+	e.episode++
+	e.step = 0
+	e.done = false
+	e.Replay = make([]ReplayEntry, 0, EpisodeSteps)
+	e.LastActions = make([]ActionModel, e.numBuildings)
+
+	// Generate price and carbon curves for this episode
+	e.generatePriceCurve()
+	e.generateCarbonCurve()
+
+	// Initialise buildings
+	e.Buildings = make([]*BuildingState, e.numBuildings)
+	e.TempHistory = make([][]float64, e.numBuildings)
+	e.CostHistory = make([][]float64, e.numBuildings)
+	e.HVACHistory = make([][]float64, e.numBuildings)
+	e.LoadShedHistory = make([][]float64, e.numBuildings)
+	e.RewardHistory = make([][]RewardComponents, e.numBuildings)
+	e.totalShedSteps = make([]int, e.numBuildings)
+	e.thermalCycleCounts = make([]int, e.numBuildings)
+	e.prevChargeRates = make([]float64, e.numBuildings)
+
+	for i := 0; i < e.numBuildings; i++ {
+		e.Buildings[i] = e.newBuildingState(i)
+		e.TempHistory[i] = make([]float64, 0, EpisodeSteps)
+		e.CostHistory[i] = make([]float64, 0, EpisodeSteps)
+		e.HVACHistory[i] = make([]float64, 0, EpisodeSteps)
+		e.LoadShedHistory[i] = make([]float64, 0, EpisodeSteps)
+		e.RewardHistory[i] = make([]RewardComponents, 0, EpisodeSteps)
+	}
+
+	obs := make([]ObservationModel, e.numBuildings)
+	for i, b := range e.Buildings {
+		obs[i] = e.buildObservation(b)
+	}
+
+	return ResetResponse{
+		Observations: obs,
+		Episode:      e.episode,
+		TaskID:       e.taskID,
+		Seed:         e.seed,
+	}
+}
+
+// Step advances the simulation by one timestep for all buildings. Thread-safe.
+func (e *Environment) Step(actions []ActionModel) ([]StepResponse, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.done {
+		return nil, true
+	}
+
+	// Validate and clamp actions
+	for i := range actions {
+		e.clampAction(&actions[i])
+		if i < e.numBuildings {
+			e.LastActions[i] = actions[i]
+		}
+	}
+
+	responses := make([]StepResponse, e.numBuildings)
+	for i, b := range e.Buildings {
+		var act ActionModel
+		// Find action for this building (by building_id or by index)
+		act = e.findAction(actions, i)
+		responses[i] = e.stepBuilding(b, act, i)
+	}
+
+	e.step++
+	if e.step >= EpisodeSteps {
+		e.done = true
+	}
+
+	// Record replay entry (aggregate of all buildings, first building primary)
+	if len(responses) > 0 {
+		entry := ReplayEntry{
+			Step:        e.step - 1,
+			Observation: responses[0].Observation,
+			Action:      e.LastActions[0],
+			Reward:      responses[0].Reward,
+			Components:  responses[0].Info.RewardComponents,
+			Done:        e.done,
+		}
+		e.Replay = append(e.Replay, entry)
+	}
+
+	return responses, e.done
+}
+
+// GetState returns a full snapshot of environment state. Thread-safe (read lock).
+func (e *Environment) GetState() StateResponse {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	buildings := make([]BuildingStatePublic, e.numBuildings)
+	for i, b := range e.Buildings {
+		pub := BuildingStatePublic{
+			ObservationModel:    e.buildObservation(b),
+			OutdoorTemperature:  b.OutdoorTemperature,
+			SetpointTemperature: b.SetpointTemperature,
+			BaselineCost:        b.BaselineCost,
+			CumulativeCarbon:    b.CumulativeCarbon,
+			Jobs:                b.Jobs,
+		}
+		if i < len(e.TempHistory) {
+			pub.TempHistory = e.TempHistory[i]
+			pub.CostHistory = e.CostHistory[i]
+			pub.HVACHistory = e.HVACHistory[i]
+			pub.LoadShedHistory = e.LoadShedHistory[i]
+			pub.RewardHistory = e.RewardHistory[i]
+		}
+		buildings[i] = pub
+	}
+
+	priceCurve := make([]float64, 24)
+	carbonCurve := make([]float64, 24)
+	for h := 0; h < 24; h++ {
+		stepIdx := h * 4
+		if stepIdx < EpisodeSteps {
+			priceCurve[h] = e.PriceCurve[stepIdx]
+			carbonCurve[h] = e.CarbonCurve[stepIdx]
+		}
+	}
+
+	return StateResponse{
+		Buildings:   buildings,
+		PriceCurve:  priceCurve,
+		CarbonCurve: carbonCurve,
+		Episode:     e.episode,
+		Step:        e.step,
+		TaskID:      e.taskID,
+		Done:        e.done,
+		Seed:        e.seed,
+	}
+}
+
+// GetReplay returns the full episode replay. Thread-safe.
+func (e *Environment) GetReplay() []ReplayEntry {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	result := make([]ReplayEntry, len(e.Replay))
+	copy(result, e.Replay)
+	return result
+}
+
+// ──────────────────────────────────────────────
+// Internal helpers
+// ──────────────────────────────────────────────
+
+func (e *Environment) newBuildingState(id int) *BuildingState {
+	// Randomise initial conditions slightly
+	initTemp := DefaultSetpoint + (e.rng.Float64()-0.5)*2.0
+	storageLevel := 0.3 + e.rng.Float64()*0.4 // start 30–70% full
+	outdoorTemp := 15.0 + e.rng.Float64()*15.0 // 15–30 °C
+
+	b := &BuildingState{
+		BuildingID:          id,
+		IndoorTemperature:   initTemp,
+		ThermalStorageLevel: storageLevel,
+		ProcessDemand:       10.0 + e.rng.Float64()*20.0,
+		CurrentPrice:        e.PriceCurve[0],
+		GridStressSignal:    0.0,
+		CarbonIntensity:     e.CarbonCurve[0],
+		HourOfDay:           0,
+		Step:                0,
+		BatchQueue:          []int{},
+		CumulativeCost:      0.0,
+		CumulativeCarbon:    0.0,
+		OutdoorTemperature:  outdoorTemp,
+		PrevHVACLevel:       0.5,
+		BaselineCost:        0.0,
+		SetpointTemperature: DefaultSetpoint,
+		MaxHVACPower:        MaxHVACPowerKW,
+		MaxStorageCapacity:  MaxStorageKWh,
+		ThermalLossRate:     StorageLossRate,
+	}
+
+	// Spawn batch jobs based on difficulty
+	b.Jobs = e.generateBatchJobs()
+	b.BatchQueue = pendingDeadlines(b.Jobs)
+	return b
+}
+
+func (e *Environment) generateBatchJobs() []BatchJob {
+	numJobs := 3
+	switch e.difficulty {
+	case "medium":
+		numJobs = 4
+	case "hard":
+		numJobs = 5
+	}
+
+	jobs := make([]BatchJob, numJobs)
+	for i := range jobs {
+		// Deadline spread across episode, ensuring feasibility
+		deadline := 20 + e.rng.Intn(60)
+		jobs[i] = BatchJob{
+			ID:           i + 1,
+			DeadlineSlot: deadline,
+			Duration:     1 + e.rng.Intn(3),
+			PowerDraw:    5.0 + e.rng.Float64()*15.0,
+			Scheduled:    false,
+			ScheduledAt:  -1,
+			Completed:    false,
+			MissedDeadline: false,
+		}
+	}
+	return jobs
+}
+
+// generatePriceCurve creates a stochastic Time-of-Use price curve for the episode.
+func (e *Environment) generatePriceCurve() {
+	// Base ToU: low overnight, moderate morning, high peak (8-12, 17-21), low night
+	volatility := 0.1
+	switch e.difficulty {
+	case "medium":
+		volatility = 0.2
+	case "hard":
+		volatility = 0.35
+	}
+
+	// Random peak window shift (±2 hours) for stochasticity
+	morningPeakShift := e.rng.Intn(5) - 2
+	eveningPeakShift := e.rng.Intn(5) - 2
+
+	for s := 0; s < EpisodeSteps; s++ {
+		hour := (s / 4)
+		base := touPrice(hour, morningPeakShift, eveningPeakShift)
+		noise := (e.rng.Float64()*2 - 1) * volatility * base
+		price := math.Max(0.02, base+noise)
+		e.PriceCurve[s] = price
+	}
+}
+
+// touPrice returns the base time-of-use price for a given hour.
+func touPrice(hour, morningShift, eveningShift int) float64 {
+	// Off-peak: 0.04 $/kWh, on-peak: 0.18 $/kWh, extreme peak: 0.32 $/kWh
+	morningPeakStart := 8 + morningShift
+	morningPeakEnd := 12 + morningShift
+	eveningPeakStart := 17 + eveningShift
+	eveningPeakEnd := 21 + eveningShift
+
+	switch {
+	case hour >= morningPeakStart && hour < morningPeakEnd:
+		return 0.18
+	case hour >= eveningPeakStart && hour <= eveningPeakEnd:
+		return 0.22
+	case (hour >= 9 && hour < morningPeakStart) || (hour >= morningPeakEnd && hour < eveningPeakStart):
+		return 0.10
+	case hour >= 23 || hour < 6:
+		return 0.04
+	default:
+		return 0.08
+	}
+}
+
+// generateCarbonCurve creates a realistic carbon intensity curve (gCO2/kWh).
+// Correlates roughly with price: higher price = more peaker plants = higher carbon.
+func (e *Environment) generateCarbonCurve() {
+	for s := 0; s < EpisodeSteps; s++ {
+		price := e.PriceCurve[s]
+		// Map price range [0.04, 0.32] → carbon [150, 600] gCO2/kWh
+		carbon := 150.0 + (price-0.04)/(0.32-0.04)*(600.0-150.0)
+		noise := (e.rng.Float64()*2 - 1) * 30.0
+		e.CarbonCurve[s] = math.Max(100.0, carbon+noise)
+	}
+}
+
+// stepBuilding advances a single building by one timestep.
+func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) StepResponse {
+	s := e.step
+
+	// Update environmental signals from curves
+	b.CurrentPrice = e.PriceCurve[s]
+	b.CarbonIntensity = e.CarbonCurve[s]
+	b.HourOfDay = (s / 4) % 24
+
+	// Stochastic grid stress events (more frequent in hard mode)
+	b.GridStressSignal = e.updateGridStress(b, s)
+
+	// Weather perturbation: outdoor temp drifts sinusoidally + noise
+	b.OutdoorTemperature = e.updateOutdoorTemp(b, s)
+
+	// Process demand fluctuation
+	b.ProcessDemand = e.updateProcessDemand(b, s)
+
+	// ----- Apply actions -----
+
+	// 1. HVAC: heats/cools building toward setpoint
+	hvacPower := act.HVACPowerLevel * b.MaxHVACPower // kW
+
+	// 2. Thermal storage: charge or discharge
+	chargeKW := act.ThermalChargeRate * b.MaxHVACPower * 0.3 // max 30% of HVAC for storage
+	newStorageEnergy := b.ThermalStorageLevel*b.MaxStorageCapacity + chargeKW*StepDurationHrs
+	// Apply thermal losses
+	newStorageEnergy *= (1.0 - b.ThermalLossRate)
+	newStorageEnergy = math.Max(0, math.Min(b.MaxStorageCapacity, newStorageEnergy))
+	b.ThermalStorageLevel = newStorageEnergy / b.MaxStorageCapacity
+
+	// 3. Load shedding
+	clampedShed := math.Max(0, math.Min(0.5, act.LoadShedFraction))
+	shedKW := clampedShed * b.ProcessDemand
+
+	// 4. Batch job scheduling
+	batchCompleted, batchMissed := e.updateBatchJobs(b, act.BatchJobSlot, s)
+
+	// ----- Thermal dynamics -----
+	// Simple first-order thermal model:
+	// ΔT per step = (HVAC effect + outdoor infiltration + storage discharge effect - process demand)
+	hvacEffect := (act.HVACPowerLevel - 0.5) * 2.0 * 1.5 // ±3°C max swing per step
+	infiltration := (b.OutdoorTemperature - b.IndoorTemperature) * 0.03
+	storageEffect := 0.0
+	if act.ThermalChargeRate < 0 { // discharging storage = provides cooling/heating
+		storageEffect = math.Abs(act.ThermalChargeRate) * 0.5
+	}
+	processHeat := b.ProcessDemand * 0.002 // kW→°C rough factor
+	deltaT := hvacEffect + infiltration + storageEffect - processHeat
+	b.IndoorTemperature += deltaT
+
+	// ----- Energy & cost accounting -----
+	batchPowerDraw := e.batchRunningPower(b)
+	totalKW := hvacPower + math.Max(0, chargeKW) + batchPowerDraw - shedKW
+	totalKW = math.Max(0, totalKW)
+	energyKWh := totalKW * StepDurationHrs
+	stepCost := energyKWh * b.CurrentPrice
+	stepCarbon := energyKWh * b.CarbonIntensity
+
+	b.CumulativeCost += stepCost
+	b.CumulativeCarbon += stepCarbon
+
+	// Baseline (always-on at 70% HVAC, no storage/shedding)
+	baselineKW := 0.7*b.MaxHVACPower + b.ProcessDemand
+	baselineEnergy := baselineKW * StepDurationHrs
+	b.BaselineCost += baselineEnergy * b.CurrentPrice
+
+	// ----- Reward computation -----
+	rc := ComputeReward(ComputeRewardInput{
+		B:               b,
+		Act:             act,
+		StepCost:        stepCost,
+		EnergyKWh:       energyKWh,
+		TMin:            TMinDefault,
+		TMax:            TMaxDefault,
+		StepCarbon:      stepCarbon,
+		BatchMissed:     len(batchMissed),
+		GridStress:      b.GridStressSignal,
+		ShedFraction:    clampedShed,
+		TaskID:          e.taskID,
+		PrevHVACLevel:   b.PrevHVACLevel,
+		ChargeRate:      act.ThermalChargeRate,
+		PrevChargeRate:  e.prevChargeRates[idx],
+		StorageDelta:    act.ThermalChargeRate,
+		PriceCurve:      e.PriceCurve[:],
+		CurrentStep:     s,
+	})
+	b.PrevHVACLevel = act.HVACPowerLevel
+	e.prevChargeRates[idx] = act.ThermalChargeRate
+
+	// Update batch queue
+	b.BatchQueue = pendingDeadlines(b.Jobs)
+
+	// Exploit detection
+	if clampedShed > 0.4 {
+		e.totalShedSteps[idx]++
+	}
+	if len(e.thermalCycleCounts) > idx {
+		if len(e.Replay) > 0 {
+			prev := e.prevChargeRates[idx]
+			if prev > 0.3 && act.ThermalChargeRate < -0.3 || prev < -0.3 && act.ThermalChargeRate > 0.3 {
+				e.thermalCycleCounts[idx]++
+			}
+		}
+	}
+
+	// Record history
+	if idx < len(e.TempHistory) {
+		e.TempHistory[idx] = append(e.TempHistory[idx], b.IndoorTemperature)
+		e.CostHistory[idx] = append(e.CostHistory[idx], b.CumulativeCost)
+		e.HVACHistory[idx] = append(e.HVACHistory[idx], act.HVACPowerLevel)
+		e.LoadShedHistory[idx] = append(e.LoadShedHistory[idx], clampedShed)
+		e.RewardHistory[idx] = append(e.RewardHistory[idx], rc)
+	}
+
+	obs := e.buildObservation(b)
+
+	return StepResponse{
+		Observation: obs,
+		Reward:      rc.Total,
+		Done:        e.done || s+1 >= EpisodeSteps,
+		Info: StepInfo{
+			RewardComponents: rc,
+			EnergyUsed:       energyKWh,
+			CarbonEmitted:    stepCarbon,
+			PriceSignal:      b.CurrentPrice,
+			GridStress:       b.GridStressSignal,
+			BatchCompleted:   batchCompleted,
+			BatchMissed:      batchMissed,
+			Episode:          e.episode,
+			Step:             s,
+		},
+	}
+}
+
+func (e *Environment) updateGridStress(b *BuildingState, s int) float64 {
+	// Grid stress is elevated during price peaks and stochastic demand spikes
+	price := e.PriceCurve[s]
+	priceNorm := (price - 0.04) / (0.32 - 0.04)
+
+	// Random stress events
+	stressProb := 0.05
+	switch e.difficulty {
+	case "medium":
+		stressProb = 0.1
+	case "hard":
+		stressProb = 0.2
+	}
+	spike := 0.0
+	if e.rng.Float64() < stressProb {
+		spike = 0.3 + e.rng.Float64()*0.5
+	}
+	stress := math.Min(1.0, priceNorm*0.6+spike)
+	return math.Max(0, stress)
+}
+
+func (e *Environment) updateOutdoorTemp(b *BuildingState, s int) float64 {
+	// Sinusoidal daily temperature cycle + noise
+	hour := float64(s) / 4.0
+	baseTemp := 15.0 + 8.0*math.Sin(2*math.Pi*(hour-6)/24.0)
+	noise := (e.rng.Float64()*2 - 1) * 1.5
+	return baseTemp + noise
+}
+
+func (e *Environment) updateProcessDemand(b *BuildingState, s int) float64 {
+	// Process demand shifts with business hours
+	hour := s / 4
+	base := 10.0
+	if hour >= 8 && hour <= 18 {
+		base = 20.0 + 10.0*math.Sin(math.Pi*float64(hour-8)/10.0)
+	}
+	noise := (e.rng.Float64()*2 - 1) * 3.0
+	return math.Max(0, base+noise)
+}
+
+func (e *Environment) updateBatchJobs(b *BuildingState, slot int, step int) (completed []int, missed []int) {
+	completed = []int{}
+	missed = []int{}
+
+	// Schedule the first pending job into the chosen slot
+	for i := range b.Jobs {
+		job := &b.Jobs[i]
+		if !job.Scheduled && !job.Completed && !job.MissedDeadline {
+			schedAt := step + slot
+			job.Scheduled = true
+			job.ScheduledAt = schedAt
+			break // only schedule one job per step
+		}
+	}
+
+	// Advance running or completed jobs
+	for i := range b.Jobs {
+		job := &b.Jobs[i]
+		if job.Completed || job.MissedDeadline {
+			continue
+		}
+		// Check deadline miss
+		if step >= job.DeadlineSlot && !job.Completed {
+			job.MissedDeadline = true
+			missed = append(missed, job.ID)
+			continue
+		}
+		// Mark as completed if scheduled and past its start
+		if job.Scheduled && step >= job.ScheduledAt {
+			if step >= job.ScheduledAt+job.Duration-1 {
+				job.Completed = true
+				completed = append(completed, job.ID)
+			}
+		}
+	}
+	return
+}
+
+func (e *Environment) batchRunningPower(b *BuildingState) float64 {
+	total := 0.0
+	for _, job := range b.Jobs {
+		if job.Scheduled && !job.Completed && !job.MissedDeadline {
+			if e.step >= job.ScheduledAt && e.step < job.ScheduledAt+job.Duration {
+				total += job.PowerDraw
+			}
+		}
+	}
+	return total
+}
+
+func (e *Environment) buildObservation(b *BuildingState) ObservationModel {
+	return ObservationModel{
+		IndoorTemperature:   math.Round(b.IndoorTemperature*100) / 100,
+		ThermalStorageLevel: math.Round(b.ThermalStorageLevel*1000) / 1000,
+		ProcessDemand:       math.Round(b.ProcessDemand*100) / 100,
+		CurrentPrice:        math.Round(b.CurrentPrice*10000) / 10000,
+		GridStressSignal:    math.Round(b.GridStressSignal*1000) / 1000,
+		CarbonIntensity:     math.Round(b.CarbonIntensity*10) / 10,
+		HourOfDay:           b.HourOfDay,
+		BatchQueue:          pendingDeadlines(b.Jobs),
+		CumulativeCost:      math.Round(b.CumulativeCost*10000) / 10000,
+		Step:                b.Step,
+		BuildingID:          b.BuildingID,
+	}
+}
+
+func (e *Environment) clampAction(a *ActionModel) {
+	a.HVACPowerLevel = math.Max(0, math.Min(1.0, a.HVACPowerLevel))
+	a.ThermalChargeRate = math.Max(-1.0, math.Min(1.0, a.ThermalChargeRate))
+	a.BatchJobSlot = max(0, min(4, a.BatchJobSlot))
+	a.LoadShedFraction = math.Max(0, math.Min(0.5, a.LoadShedFraction))
+}
+
+func (e *Environment) findAction(actions []ActionModel, buildingIdx int) ActionModel {
+	// Try to find an action with matching building_id, else use positional
+	for _, a := range actions {
+		if a.BuildingID == buildingIdx {
+			return a
+		}
+	}
+	if buildingIdx < len(actions) {
+		return actions[buildingIdx]
+	}
+	// Default: do-nothing action
+	return ActionModel{HVACPowerLevel: 0.5, ThermalChargeRate: 0.0, BatchJobSlot: 0, LoadShedFraction: 0.0}
+}
+
+// pendingDeadlines returns a slice of deadline slots for all incomplete, unscheduled jobs.
+func pendingDeadlines(jobs []BatchJob) []int {
+	result := []int{}
+	for _, j := range jobs {
+		if !j.Completed && !j.MissedDeadline {
+			result = append(result, j.DeadlineSlot)
+		}
+	}
+	return result
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ExploitDetected returns whether the current episode shows signs of degenerate strategies.
+func (e *Environment) ExploitDetected(buildingIdx int) (bool, float64) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if buildingIdx >= len(e.totalShedSteps) {
+		return false, 0.0
+	}
+	// Flag if agent always sheds > 40% load (more than 70% of steps)
+	shedRatio := float64(e.totalShedSteps[buildingIdx]) / float64(e.step+1)
+	cycleRatio := float64(e.thermalCycleCounts[buildingIdx]) / float64(e.step+1)
+	exploited := shedRatio > 0.7 || cycleRatio > 0.4
+	penalty := 0.0
+	if exploited {
+		penalty = math.Max(shedRatio-0.7, 0)*0.5 + math.Max(cycleRatio-0.4, 0)*0.3
+	}
+	return exploited, penalty
+}

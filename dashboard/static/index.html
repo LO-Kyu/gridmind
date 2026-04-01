@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GridMind-RL | Real-Time Energy Dashboard</title>
+  <meta name="description" content="Real-time visualization dashboard for the GridMind-RL Industrial Load-Shaping and Demand-Response RL environment." />
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Design System ─────────────────────────────────────────────── */
+    :root {
+      --bg-base:      #0a0f1e;
+      --bg-surface:   #0f1829;
+      --bg-card:      #141f35;
+      --bg-card-h:    #1a2840;
+      --border:       rgba(56, 139, 253, 0.15);
+      --border-glow:  rgba(56, 139, 253, 0.4);
+      --text-primary: #e2e8f4;
+      --text-secondary: #8899b4;
+      --text-dim:     #4d6080;
+      --accent-blue:  #388bfd;
+      --accent-green: #3fb950;
+      --accent-amber: #d29922;
+      --accent-red:   #f85149;
+      --accent-purple: #bc8cff;
+      --accent-cyan:  #39d0d8;
+      --accent-orange: #ff7c39;
+      --gradient-hero: linear-gradient(135deg, #0d1b33 0%, #0a0f1e 100%);
+      --glow-blue:    0 0 20px rgba(56,139,253,0.25), 0 0 40px rgba(56,139,253,0.1);
+      --glow-green:   0 0 20px rgba(63,185,80,0.25);
+      --font-mono:    'JetBrains Mono', monospace;
+      --radius:       12px;
+      --radius-lg:    16px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Animated background grid ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(56,139,253,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56,139,253,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10,15,30,0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo-icon {
+      width: 32px; height: 32px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .logo-text { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.3px; }
+    .logo-text span { color: var(--accent-blue); }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 8px var(--accent-green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.9); }
+    }
+    .status-label { font-size: 0.8rem; color: var(--text-secondary); }
+
+    .task-badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(56,139,253,0.15);
+      border: 1px solid var(--border);
+      color: var(--accent-blue);
+    }
+
+    /* ── KPI Bar ────────────────────────────────────────────────────── */
+    .kpi-bar {
+      position: relative; z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1px;
+      background: var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .kpi {
+      background: var(--bg-surface);
+      padding: 1rem 1.5rem;
+      display: flex; flex-direction: column; gap: 2px;
+      transition: background 0.2s;
+    }
+    .kpi:hover { background: var(--bg-card); }
+    .kpi-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-dim); }
+    .kpi-value {
+      font-family: var(--font-mono);
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      transition: color 0.3s;
+    }
+    .kpi-value.good { color: var(--accent-green); }
+    .kpi-value.warn { color: var(--accent-amber); }
+    .kpi-value.bad  { color: var(--accent-red); }
+    .kpi-delta { font-size: 0.72rem; color: var(--text-secondary); font-family: var(--font-mono); }
+
+    /* ── Main Grid ──────────────────────────────────────────────────── */
+    main {
+      position: relative; z-index: 1;
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 1.5rem;
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 1rem;
+    }
+
+    /* ── Card ───────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.25rem;
+      transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(56,139,253,0.03) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .card:hover {
+      border-color: var(--border-glow);
+      box-shadow: var(--glow-blue);
+      transform: translateY(-1px);
+    }
+    .card.alert-active {
+      border-color: rgba(248,81,73,0.5);
+      box-shadow: 0 0 20px rgba(248,81,73,0.2);
+      animation: alertPulse 1.5s infinite;
+    }
+    @keyframes alertPulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(248,81,73,0.2); }
+      50% { box-shadow: 0 0 35px rgba(248,81,73,0.4); }
+    }
+
+    .card-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .card-title .icon { font-size: 0.9rem; }
+
+    /* ── Grid layout spans ─ */
+    .col-12 { grid-column: span 12; }
+    .col-8  { grid-column: span 8; }
+    .col-6  { grid-column: span 6; }
+    .col-4  { grid-column: span 4; }
+    .col-3  { grid-column: span 3; }
+
+    @media (max-width: 1200px) {
+      .col-8  { grid-column: span 12; }
+      .col-4  { grid-column: span 12; }
+      .col-6  { grid-column: span 12; }
+      .col-3  { grid-column: span 6; }
+    }
+    @media (max-width: 768px) {
+      .col-3 { grid-column: span 12; }
+      main { padding: 0.75rem; gap: 0.75rem; }
+    }
+
+    /* ── Charts ─────────────────────────────────────────────────────── */
+    .chart-wrap { position: relative; height: 200px; }
+    .chart-wrap.tall { height: 260px; }
+    .chart-wrap.short { height: 150px; }
+
+    /* ── Thermal Storage Bar ─────────────────────────────────────────── */
+    .storage-bar-wrap {
+      height: 28px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 14px;
+      overflow: hidden;
+      margin-top: 0.5rem;
+      position: relative;
+    }
+    .storage-bar-fill {
+      height: 100%;
+      border-radius: 14px;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+      transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+    }
+    .storage-bar-fill::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%);
+      animation: shimmer 2s infinite;
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .storage-label {
+      font-family: var(--font-mono);
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      margin-top: 0.5rem;
+    }
+    .storage-label span { font-size: 1rem; color: var(--text-secondary); }
+
+    /* ── Batch Gantt ─────────────────────────────────────────────────── */
+    .gantt-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 0.25rem;
+    }
+    .gantt-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+    }
+    .gantt-label {
+      width: 40px;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      flex-shrink: 0;
+    }
+    .gantt-track {
+      flex: 1;
+      height: 18px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 4px;
+      position: relative;
+      overflow: hidden;
+    }
+    .gantt-block {
+      position: absolute;
+      top: 0; bottom: 0;
+      border-radius: 4px;
+      transition: width 0.3s, left 0.3s;
+    }
+    .gantt-block.scheduled { background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple)); }
+    .gantt-block.completed { background: var(--accent-green); opacity: 0.7; }
+    .gantt-block.missed    { background: var(--accent-red); opacity: 0.8; }
+    .gantt-deadline {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: var(--accent-amber);
+      border-radius: 1px;
+    }
+    .gantt-status {
+      width: 60px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .badge {
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+    .badge.ok      { background: rgba(63,185,80,0.2); color: var(--accent-green); }
+    .badge.pending { background: rgba(56,139,253,0.2); color: var(--accent-blue); }
+    .badge.missed  { background: rgba(248,81,73,0.2); color: var(--accent-red); }
+    .badge.running { background: rgba(188,140,255,0.2); color: var(--accent-purple); }
+
+    /* ── Reward breakdown mini-bars ──────────────────────────────── */
+    .reward-row {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.75rem; margin-bottom: 4px;
+    }
+    .reward-label { width: 100px; color: var(--text-secondary); }
+    .reward-bar-wrap { flex: 1; height: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; overflow: hidden; }
+    .reward-bar { height: 100%; border-radius: 5px; transition: width 0.5s; }
+    .reward-val { width: 55px; text-align: right; font-family: var(--font-mono); color: var(--text-primary); }
+
+    /* ── Grid stress indicator ──────────────────────────────────── */
+    .stress-meter {
+      display: flex; align-items: flex-end; gap: 3px;
+      height: 40px;
+      margin-top: 0.5rem;
+    }
+    .stress-bar {
+      flex: 1;
+      background: rgba(255,255,255,0.05);
+      border-radius: 2px 2px 0 0;
+      transition: height 0.4s, background 0.4s;
+    }
+
+    /* ── Big number display ─────────────────────────────────────── */
+    .big-num {
+      font-family: var(--font-mono);
+      font-weight: 700;
+    }
+    .big-num.xl  { font-size: 2.8rem; }
+    .big-num.lg  { font-size: 2rem; }
+    .big-num.md  { font-size: 1.4rem; }
+    .big-num.green  { color: var(--accent-green); }
+    .big-num.blue   { color: var(--accent-blue); }
+    .big-num.amber  { color: var(--accent-amber); }
+    .big-num.red    { color: var(--accent-red); }
+    .big-num.purple { color: var(--accent-purple); }
+
+    .sub-label { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+
+    /* ── Price ticker ──────────────────────────────────────────── */
+    .price-row {
+      display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    }
+    .price-tier {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      font-size: 0.8rem;
+    }
+    .price-tier .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+    /* ── Control panel ──────────────────────────────────────────── */
+    .ctrl-row {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      margin-top: 0.5rem;
+    }
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(56,139,253,0.1);
+      color: var(--accent-blue);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: 'Inter', sans-serif;
+    }
+    .btn:hover {
+      background: rgba(56,139,253,0.2);
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 12px rgba(56,139,253,0.3);
+      transform: translateY(-1px);
+    }
+    .btn.primary {
+      background: var(--accent-blue);
+      color: #fff;
+    }
+    .btn.primary:hover { background: #4da3ff; }
+    .btn.danger {
+      background: rgba(248,81,73,0.15);
+      color: var(--accent-red);
+      border-color: rgba(248,81,73,0.3);
+    }
+
+    select {
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 0.82rem;
+      font-family: 'Inter', sans-serif;
+      cursor: pointer;
+    }
+    select:focus { outline: none; border-color: var(--accent-blue); }
+
+    /* ── Connection banner ──────────────────────────────────────── */
+    #conn-banner {
+      display: none;
+      position: fixed;
+      top: 64px; left: 0; right: 0;
+      z-index: 200;
+      background: rgba(248,81,73,0.15);
+      border-bottom: 1px solid rgba(248,81,73,0.3);
+      text-align: center;
+      padding: 10px;
+      font-size: 0.85rem;
+      color: var(--accent-red);
+    }
+    #conn-banner.show { display: block; }
+
+    /* ── Footer ─────────────────────────────────────────────────── */
+    footer {
+      position: relative; z-index: 1;
+      text-align: center;
+      padding: 1.5rem;
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+<!-- Connection error banner -->
+<div id="conn-banner">
+  ⚡ Environment server unreachable — retrying...
+</div>
+
+<!-- ── Header ─── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <div class="logo-text">Grid<span>Mind</span>-RL</div>
+  </div>
+  <div class="header-status">
+    <span id="task-badge" class="task-badge">Task 1 — Cost Minimization</span>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="status-dot" id="status-dot"></div>
+      <span class="status-label" id="status-label">Live</span>
+    </div>
+    <span id="ep-step" style="font-family:var(--font-mono);font-size:0.8rem;color:var(--text-secondary)">ep:— step:—</span>
+  </div>
+</header>
+
+<!-- ── KPI Bar ─── -->
+<div class="kpi-bar">
+  <div class="kpi">
+    <span class="kpi-label">Current Price</span>
+    <span class="kpi-value" id="kpi-price">—</span>
+    <span class="kpi-delta">$/kWh</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Indoor Temp</span>
+    <span class="kpi-value" id="kpi-temp">—</span>
+    <span class="kpi-delta">°C (target 21°C)</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Grid Stress</span>
+    <span class="kpi-value" id="kpi-stress">—</span>
+    <span class="kpi-delta">0=normal 1=critical</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Cumulative Cost</span>
+    <span class="kpi-value" id="kpi-cost">—</span>
+    <span class="kpi-delta">vs baseline: <span id="kpi-baseline">—</span></span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Carbon Intensity</span>
+    <span class="kpi-value" id="kpi-carbon">—</span>
+    <span class="kpi-delta">gCO₂/kWh</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Process Demand</span>
+    <span class="kpi-value" id="kpi-demand">—</span>
+    <span class="kpi-delta">kW</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Thermal Storage</span>
+    <span class="kpi-value" id="kpi-storage">—</span>
+    <span class="kpi-delta">% capacity</span>
+  </div>
+</div>
+
+<!-- ── Main Content ─── -->
+<main>
+
+  <!-- Row 1: Price curve + Temperature + Controls -->
+  <div class="card col-8">
+    <div class="card-title"><span class="icon">💰</span> 24h Electricity Price Curve</div>
+    <div class="chart-wrap">
+      <canvas id="chart-price"></canvas>
+    </div>
+  </div>
+
+  <div class="card col-4" id="card-stress">
+    <div class="card-title"><span class="icon">⚠️</span> Grid Stress Signal</div>
+    <div class="big-num xl" id="stress-big">0.00</div>
+    <div class="sub-label">Demand-response urgency</div>
+    <div class="stress-meter" id="stress-meter"></div>
+    <div style="margin-top:0.75rem;">
+      <div class="chart-wrap short">
+        <canvas id="chart-stress"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2: Temperature + Storage + HVAC -->
+  <div class="card col-6">
+    <div class="card-title"><span class="icon">🌡️</span> Temperature Timeline</div>
+    <div class="chart-wrap tall">
+      <canvas id="chart-temp"></canvas>
+    </div>
+  </div>
+
+  <div class="card col-3">
+    <div class="card-title"><span class="icon">🔋</span> Thermal Storage Level</div>
+    <div class="storage-label"><span id="storage-pct">—</span><span>%</span></div>
+    <div class="storage-bar-wrap">
+      <div class="storage-bar-fill" id="storage-fill" style="width:0%"></div>
+    </div>
+    <div style="margin-top:1rem">
+      <div class="chart-wrap short">
+        <canvas id="chart-storage"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="card col-3">
+    <div class="card-title"><span class="icon">❄️</span> HVAC + Load Shed</div>
+    <div class="chart-wrap tall">
+      <canvas id="chart-hvac"></canvas>
+    </div>
+  </div>
+
+  <!-- Row 3: Cost comparison + Reward breakdown -->
+  <div class="card col-8">
+    <div class="card-title"><span class="icon">📊</span> Cumulative Cost vs Baseline</div>
+    <div class="chart-wrap tall">
+      <canvas id="chart-cost"></canvas>
+    </div>
+  </div>
+
+  <div class="card col-4">
+    <div class="card-title"><span class="icon">🏆</span> Reward Breakdown</div>
+    <div id="reward-rows" style="margin-top:0.5rem"></div>
+    <div style="margin-top:1rem">
+      <div class="chart-wrap short">
+        <canvas id="chart-reward"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 4: Batch Gantt + Carbon -->
+  <div class="card col-6">
+    <div class="card-title"><span class="icon">⚙️</span> Batch Job Timeline</div>
+    <div class="gantt-wrap" id="gantt-wrap">
+      <div style="color:var(--text-dim);font-size:0.8rem">No batch jobs queued.</div>
+    </div>
+  </div>
+
+  <div class="card col-6">
+    <div class="card-title"><span class="icon">🌍</span> Carbon Intensity Curve (24h)</div>
+    <div class="chart-wrap">
+      <canvas id="chart-carbon"></canvas>
+    </div>
+  </div>
+
+  <!-- Row 5: Controls -->
+  <div class="card col-12">
+    <div class="card-title"><span class="icon">🎮</span> Episode Controls</div>
+    <div class="ctrl-row">
+      <select id="task-select" onchange="onTaskChange()">
+        <option value="1">Task 1 — Cost Minimization (Easy)</option>
+        <option value="2">Task 2 — Temperature Management (Medium)</option>
+        <option value="3">Task 3 — Full Demand Response (Hard)</option>
+      </select>
+      <select id="building-select" onchange="onBuildingChange()">
+        <option value="0">Building 1 (Primary)</option>
+        <option value="1">Building 2</option>
+        <option value="2">Building 3</option>
+      </select>
+      <button id="btn-reset" class="btn primary" onclick="doReset()">↺ New Episode</button>
+      <button class="btn" onclick="doGrade()">📋 Grade Episode</button>
+      <button class="btn" onclick="window.open('/api/replay')">📥 Export Replay</button>
+      <span id="grade-result" style="font-family:var(--font-mono);font-size:0.9rem;color:var(--accent-green)"></span>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  GridMind-RL &nbsp;·&nbsp; OpenEnv-compliant RL environment for industrial demand response &nbsp;·&nbsp; 
+  <a href="/api/health" target="_blank" style="color:var(--accent-blue);text-decoration:none">API Health</a> &nbsp;·&nbsp;
+  <a href="/api/metrics" target="_blank" style="color:var(--accent-blue);text-decoration:none">Metrics</a>
+</footer>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
