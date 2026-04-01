@@ -5,7 +5,7 @@ Runs an LLM agent against all 3 tasks for N episodes each.
 Uses OpenAI-compatible API via API_BASE_URL / MODEL_NAME / HF_TOKEN environment variables.
 
 Usage:
-    export API_BASE_URL=https://api-inference.huggingface.co/v1
+    export API_BASE_URL=https://router.huggingface.co/v1
     export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
     export HF_TOKEN=hf_xxxx
     python python/inference.py [--episodes 3] [--env-url http://localhost:7860]
@@ -26,7 +26,7 @@ from openai import OpenAI
 # ── Constants ──────────────────────────────────────────────────────────────
 
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 DEFAULT_EPISODES = 3
@@ -244,6 +244,11 @@ def run_episode(env_client: GridMindEnvClient, agent: LLMAgent,
     while not step_resp.get("done", False):
         action = agent.choose_action(obs, task_id)
         step_resp = env_client.step(action)
+
+        if step_resp is None or "observation" not in step_resp:
+            print(f"  [WARN] step {_step}: server returned invalid response, skipping step")
+            _step += 1
+            break
 
         obs = step_resp["observation"]
         total_reward += step_resp["reward"]
