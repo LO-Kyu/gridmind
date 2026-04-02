@@ -245,12 +245,15 @@ def run_episode(env_client: GridMindEnvClient, agent: LLMAgent,
     total_reward = 0.0
     total_steps = 0
     start_time = time.time()
+    
+    print("[START]")
 
     step_resp = {}
-    _step = 0
+    _step = 1
     while not step_resp.get("done", False):
         action = agent.choose_action(obs, task_id)
         step_resp = env_client.step(action)
+        print(f"[STEP{_step}]")
 
         if step_resp is None or "observation" not in step_resp:
             print(f"  [WARN] step {_step}: server returned invalid response, skipping step")
@@ -269,6 +272,7 @@ def run_episode(env_client: GridMindEnvClient, agent: LLMAgent,
                   f"reward={step_resp['reward']:.3f}")
         _step += 1
 
+    print("[END]")
     elapsed = time.time() - start_time
     grade = env_client.grade()
 
