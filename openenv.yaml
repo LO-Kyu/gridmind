@@ -1,0 +1,143 @@
+name: gridmind-rl
+version: 1.0.0
+description: |
+  GridMind-RL: Industrial Load-Shaping and Demand-Response Environment.
+  An RL environment simulating a real-world building energy management system.
+  Control HVAC, thermal storage, and schedule batch jobs in response to
+  stochastic time-of-use prices and grid stress events.
+
+author: LOKyu Team
+tags:
+  - reinforcement-learning
+  - energy
+  - demand-response
+  - continuous-control
+  - discrete-control
+
+server:
+  host: "0.0.0.0"
+  port: 7860
+  protocol: http
+
+schemas:
+  observation:
+    type: object
+    properties:
+      indoor_temperature:
+        type: number
+        description: Current building/process temperature (°C)
+      thermal_storage_level:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        description: Thermal storage tank level (0.0=empty, 1.0=full)
+      process_demand:
+        type: number
+        description: Current process industrial power demand (kW)
+      current_price:
+        type: number
+        description: Real-time electricity price ($/kWh)
+      grid_stress_signal:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        description: Utility signal for DR urgency (0=normal, 1=critical)
+      carbon_intensity:
+        type: number
+        description: Grid carbon intensity (gCO2/kWh)
+      hour_of_day:
+        type: integer
+        minimum: 0
+        maximum: 23
+        description: Hour of the day for time-aware scheduling
+      batch_queue:
+        type: array
+        items:
+          type: integer
+        description: List of pending batch jobs (values are deadline slot indices)
+      cumulative_cost:
+        type: number
+        description: Total energy cost incurred so far this episode ($)
+      step:
+        type: integer
+        minimum: 0
+        maximum: 95
+        description: Current episode step (15-min intervals)
+      building_id:
+        type: integer
+        description: Building identifier for multi-building federation
+
+  action:
+    type: object
+    required:
+      [
+        "hvac_power_level",
+        "thermal_charge_rate",
+        "batch_job_slot",
+        "load_shed_fraction",
+      ]
+    properties:
+      hvac_power_level:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        description: Fraction of max HVAC power to apply (0.0-1.0)
+      thermal_charge_rate:
+        type: number
+        minimum: -1.0
+        maximum: 1.0
+        description: Thermal storage charge (+) or discharge (-) rate
+      batch_job_slot:
+        type: integer
+        minimum: 0
+        maximum: 4
+        description: Which time slot to schedule the next batch job (0=now, 1-4=defer)
+      load_shed_fraction:
+        type: number
+        minimum: 0.0
+        maximum: 0.5
+        description: Fraction of non-critical load to shed during grid stress (0.0-0.5)
+      building_id:
+        type: integer
+        description: Building identifier for multi-building federation
+
+  reward:
+    type: number
+    description: Dense multi-component reward combining cost savings, temperature constraints, grid response, and deadlines.
+
+tasks:
+  - id: 1
+    name: "Cost Minimization"
+    description: "Minimize total energy cost over a 24-hour episode with no process constraints."
+    difficulty: "easy"
+  - id: 2
+    name: "Constrained Temperature Management"
+    description: "Minimize cost while keeping indoor temperature within ±2°C of setpoint at all times."
+    difficulty: "medium"
+  - id: 3
+    name: "Full Demand-Response with Batch Scheduling"
+    description: "Minimize cost, maintain temperature, respond to grid stress events, schedule all batch jobs, and minimize carbon."
+    difficulty: "hard"
+
+endpoints:
+  health:
+    path: /health
+    method: GET
+  reset:
+    path: /reset
+    method: POST
+  step:
+    path: /step
+    method: POST
+  state:
+    path: /state
+    method: GET
+  grade:
+    path: /grade
+    method: GET
+  replay:
+    path: /replay
+    method: GET
+  tasks:
+    path: /tasks
+    method: GET
