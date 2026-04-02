@@ -1,0 +1,54 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "api_base": "https://router.huggingface.co/v1",
+  "episodes_per_task": 1,
+  "seed_base": 1000,
+  "task_averages": {
+    "1": 0.7664,
+    "2": 0.1332,
+    "3": 0.144
+  },
+  "overall_average": 0.3478666666666667,
+  "all_results": [
+    {
+      "task_id": 1,
+      "seed": 1100,
+      "total_reward": -24.481103708779088,
+      "total_steps": 267,
+      "elapsed_sec": 15.361155271530151,
+      "score": 0.7664,
+      "sub_scores": {
+        "cost": 0.7664032944600553
+      },
+      "exploit_detected": false
+    },
+    {
+      "task_id": 2,
+      "seed": 1200,
+      "total_reward": -2176.488362731018,
+      "total_steps": 284,
+      "elapsed_sec": 3.9256582260131836,
+      "score": 0.1332,
+      "sub_scores": {
+        "cost": 0.18956946086927984,
+        "temperature": 0.04861111111111111
+      },
+      "exploit_detected": false
+    },
+    {
+      "task_id": 3,
+      "seed": 1300,
+      "total_reward": -2337.268269877898,
+      "total_steps": 285,
+      "elapsed_sec": 3.49006724357605,
+      "score": 0.144,
+      "sub_scores": {
+        "batch_deadline": 0,
+        "cost": 0.19033424572859092,
+        "grid_response": 0.2608695652173913,
+        "temperature": 0.04861111111111111
+      },
+      "exploit_detected": false
+    }
+  ]
+}

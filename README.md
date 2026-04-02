@@ -9,8 +9,8 @@
 ## 🚀 Quick Start (3 Steps)
 
 1. **Get a free AI API key** from [Hugging Face](https://huggingface.co/join) (takes 2 minutes)
-2. **Run the simulator**: `docker run -p 7860:7860 -p 7861:7861 ghcr.io/your-repo/gridmind-rl:latest`
-3. **Watch the AI learn**: `python python/inference.py --episodes 1`
+2. **Run the simulator**: `docker build -q -t gridmind-rl . && docker run -p 7860:7860 -p 7861:7861 gridmind-rl`
+3. **Watch the AI learn**: `python inference.py --episodes 1`
 
 That's it! The AI will start making energy decisions and you'll see live results.
 
@@ -99,22 +99,16 @@ python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 7861
 
 **On Windows (PowerShell - Recommended)**:
 ```powershell
-$env:API_BASE_URL = "https://router.huggingface.co/v1"
-$env:MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 $env:HF_TOKEN = "hf_your_token_here"  # Paste your token here
 ```
 
 **On Windows (Command Prompt)**:
 ```cmd
-set API_BASE_URL=https://router.huggingface.co/v1
-set MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
 set HF_TOKEN=hf_your_token_here
 ```
 
 **On Mac/Linux**:
 ```bash
-export API_BASE_URL=https://router.huggingface.co/v1
-export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
 export HF_TOKEN=hf_your_token_here
 ```
 
@@ -122,7 +116,7 @@ export HF_TOKEN=hf_your_token_here
 
 ```bash
 # Run 3 learning episodes (takes ~5 minutes)
-python python/inference.py --episodes 3
+python inference.py --episodes 3
 ```
 
 You'll see output like:
@@ -202,7 +196,7 @@ $env:MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.3"  # Faster but less accura
 
 **Run longer training**:
 ```bash
-python python/inference.py --episodes 10  # Takes ~30 minutes
+python inference.py --episodes 10  # Takes ~30 minutes
 ```
 
 **Test the environment manually**:

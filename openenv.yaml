@@ -8,6 +8,7 @@ description: |
 
 author: LOKyu Team
 tags:
+  - openenv
   - reinforcement-learning
   - energy
   - demand-response
