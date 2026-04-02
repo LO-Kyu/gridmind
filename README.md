@@ -89,6 +89,12 @@ go run main.go
 pip install -r python/requirements.txt
 ```
 
+**Start the Visualization Dashboard**:
+Since you're running manually, the visualization dashboard needs to be started in a new terminal window:
+```bash
+python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 7861
+```
+
 ### Step 3: Configure the AI
 
 **On Windows (PowerShell - Recommended)**:
