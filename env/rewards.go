@@ -31,10 +31,10 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	rc := RewardComponents{}
 
 	// ── 1. Cost Savings ─────────────────────────────────────────────────────
-	// Negative reward proportional to energy cost. Normalised by typical step cost.
-	// Typical step cost at full load, peak price: 50kW * 0.25h * 0.32 = $4.00.
+	// Shift from pure penalty to a positive baseline: standardizing operations gives positive reward.
+	// Baseline reward of 1.5, minus the relative cost.
 	typicalCost := 4.0
-	rc.CostSavings = -(inp.StepCost / typicalCost) * 2.0
+	rc.CostSavings = 1.5 - (inp.StepCost / typicalCost) * 2.0
 
 	// ── 2. Temperature Constraint ────────────────────────────────────────────
 	// Only active for task 2 and 3.
@@ -75,12 +75,12 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	}
 
 	// ── 7. Carbon Reward ─────────────────────────────────────────────────────
-	// Low-carbon bonus: active for task 3 (and optional overlay on others).
+	// Low-carbon bonus: active for task 3.
 	if inp.TaskID >= 3 {
 		// Normalise carbon: iso-ne range roughly 100–700 gCO2/kWh
 		carbonNorm := (inp.B.CarbonIntensity - 100.0) / 600.0
-		// Reward for reducing energy during high-carbon periods
-		rc.CarbonReward = -inp.EnergyKWh * carbonNorm * 0.3
+		// Provide a baseline positive score, reduced by carbon footprint
+		rc.CarbonReward = 0.5 - (inp.EnergyKWh * carbonNorm * 0.3)
 	}
 
 	// ── Aggregate ────────────────────────────────────────────────────────────
@@ -97,11 +97,11 @@ func computeTempReward(temp, setpoint, tMin, tMax float64) float64 {
 		// Gaussian-shaped bonus: maximum at setpoint, degrades toward bounds
 		deviation := math.Abs(temp - setpoint)
 		sigma := (tMax - tMin) / 4.0
-		return math.Exp(-0.5*(deviation/sigma)*(deviation/sigma)) * 0.5
+		return math.Exp(-0.5*(deviation/sigma)*(deviation/sigma)) * 1.5 // Increased positive reward
 	}
 	// Outside bounds: proportional penalty
 	excess := math.Max(temp-tMax, tMin-temp)
-	return -excess * 0.4
+	return -excess * 0.6
 }
 
 // computeGridResponse returns a bonus for shedding load during high grid stress,
