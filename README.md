@@ -1,221 +1,236 @@
-# GridMind-RL 🏢⚡🤖
+# GridMind-RL
 
-**An AI-powered energy management simulator** - Watch an AI agent learn to control building energy systems using real-time electricity prices, temperature control, and grid demands.
-
-> **New to AI or coding?** No problem! This guide will get you running in 10 minutes.
+**OpenEnv-style environment** for reinforcement learning and LLM agents on **building energy management**: HVAC, thermal storage, demand response, batch job scheduling, and load shedding under time-varying electricity prices and grid stress.
 
 ---
 
-## 🚀 Quick Start (3 Steps)
+## Project overview
 
-1. **Get a free AI API key** from [Hugging Face](https://huggingface.co/join) (takes 2 minutes)
-2. **Run the simulator**: `docker run -p 7860:7860 -p 7861:7861 ghcr.io/your-repo/gridmind-rl:latest`
-3. **Watch the AI learn**: `python inference.py --episodes 1` (or `--fast-mode` for a quick heuristic run, no API calls)
+GridMind-RL simulates a **24-hour** control horizon at **15-minute resolution** (96 steps per episode). The agent observes prices, temperature, storage, process load, grid stress, carbon intensity, and batch job deadlines; it acts with continuous and discrete controls aligned with real **demand response** and **industrial/commercial** load-shaping problems.
 
-That's it! The AI will start making energy decisions and you'll see live results.
+**Why it matters:** Optimizing flexible loads against **time-of-use pricing** and **grid signals** reduces cost and emissions while respecting comfort and process constraints—an active area for RL and LLM-based control research.
 
----
+**Strengths for judges**
 
-## 📖 What is GridMind-RL?
-
-Imagine you're managing a commercial building's energy use. Electricity costs change every 15 minutes, the weather fluctuates, and the power grid sometimes needs help. Your job? Keep the building comfortable while saving money and helping the grid.
-
-**GridMind-RL** is a computer simulation where an AI "brain" (like ChatGPT) learns to make these decisions. It controls:
-- 🏭 HVAC cooling/heating
-- 🔋 Thermal energy storage
-- ⏰ Batch process scheduling
-- ⚡ Load shedding during grid emergencies
-
-The AI learns through trial and error, getting "rewards" for good decisions (saving money, staying comfortable) and "penalties" for bad ones (wasting energy, uncomfortable temperatures).
+| Area | Detail |
+|------|--------|
+| Spec | `openenv.yaml` documents server port, schemas, tasks, and endpoints |
+| API | REST: reset, step, state, grade, health, ping, replay, tasks, metrics |
+| Tasks | Three levels (easy / medium / hard) with deterministic episode grading |
+| Baseline | Root `inference.py` + OpenAI-compatible LLM client and heuristic fallback |
+| Ops | Multi-stage **Docker** image: Go environment + Python dashboard + deps |
 
 ---
 
-## 🛠️ Setup Guide
+## Quick start (copy-paste)
 
-### Prerequisites (What You Need First)
+**Minimal flow** (API on **7860** only; keep Docker running, then run `python` in a **second** terminal from the repo root with `pip install -r python/requirements.txt` already done):
 
-- **🐳 Docker** - Download from [docker.com](https://www.docker.com/products/docker-desktop) (free)
-- **🐍 Python 3.9+** - Download from [python.org](https://www.python.org/downloads/) (free)
-- **🔑 Hugging Face API Key** - Free account at [huggingface.co](https://huggingface.co/join)
-
-### Step 1: Get Your Free AI API Key
-
-1. Go to [https://huggingface.co/join](https://huggingface.co/join) and create a free account
-2. Click your profile → Settings → Access Tokens
-3. Click "New token", name it `gridmind`, select "Read" role
-4. Copy the token (starts with `hf_...`)
-
-**This is free!** No credit card needed.
-
-### Step 2: Download and Run the Simulator
-
-#### Option A: Docker (Easiest - Recommended)
-
-First, build the simulator:
 ```bash
 docker build -t gridmind-rl .
+docker run -p 7860:7860 gridmind-rl
+
+python inference.py --fast-mode --episodes 1
 ```
 
-Then run it:
-```bash
-docker run -p 7860:7860 -p 7861:7861 gridmind-rl
-```
+### 1. Build and run (Docker)
 
-The simulator starts on:
-- **API Server**: http://localhost:7860 (for the AI)
-- **Live Dashboard**: http://localhost:7861 (watch in your browser!)
-
-#### Option B: Manual Setup (If Docker Doesn't Work)
-
-**Install Go** (for the simulator):
-- Download from [go.dev/dl](https://go.dev/dl/)
-- Install and restart your terminal
-
-**Run the simulator**:
-```bash
-# Start the energy environment
-go run main.go
-```
-
-**On Windows** (if you have the pre-built executable):
-```powershell
-# Run the compiled version (faster startup)
-.\grid.exe
-```
-
-**Install Python tools**:
-```bash
-# Install required packages
-pip install -r python/requirements.txt
-```
-
-**Start the Visualization Dashboard**:
-Since you're running manually, the visualization dashboard needs to be started in a new terminal window:
-```bash
-python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 7861
-```
-
-### Step 3: Configure the AI
-
-**On Windows (PowerShell - Recommended)**:
-```powershell
-$env:API_BASE_URL = "https://router.huggingface.co/v1"
-$env:MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-$env:HF_TOKEN = "hf_your_token_here"  # Paste your token here
-```
-
-**On Windows (Command Prompt)**:
-```cmd
-set API_BASE_URL=https://router.huggingface.co/v1
-set MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
-set HF_TOKEN=hf_your_token_here
-```
-
-**On Mac/Linux**:
-```bash
-export API_BASE_URL=https://router.huggingface.co/v1
-export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
-export HF_TOKEN=hf_your_token_here
-```
-
-### Step 4: Watch the AI Learn!
+From the **repository root**:
 
 ```bash
-# Run 3 learning episodes (takes ~5 minutes)
-python inference.py --episodes 3
+docker build -t gridmind-rl .
+docker run --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl
 ```
 
-You'll see output like:
-```
-Episode 1/3 - Task 1 (Easy): Learning to save energy...
-AI Decision: Lowering HVAC to save $2.50
-Score: 0.85
+- **7860** — Environment API (OpenEnv / agent traffic)  
+- **7861** — Web dashboard (optional)
 
-Episode 2/3 - Task 2 (Medium): Balancing cost + comfort...
-AI Decision: Using thermal storage during cheap hours
-Score: 0.72
-```
+**Windows (PowerShell)** — same commands in a terminal with Docker Desktop running.
 
----
+### 2. Validate the API (optional)
 
-## 📊 What the AI Learns
+With the container running, from the repo root (host Python with `requests`):
 
-The AI progresses through **3 difficulty levels**:
-
-| Level | Challenge | What It Learns |
-|-------|-----------|----------------|
-| **Easy** | Save money | Basic energy cost optimization |
-| **Medium** | Stay comfortable | Keep building 68-74°F (19-23°C) |
-| **Hard** | Handle emergencies | Respond to grid stress + meet production deadlines |
-
-**Scoring**: 1.0 = Perfect, 0.0 = Random guessing. Good scores are 0.6+.
-
----
-
-## 🎮 Interactive Dashboard
-
-While the AI runs, open http://localhost:7861 in your browser to see:
-- 📈 Live energy usage charts
-- 🌡️ Temperature trends
-- 💰 Cost savings over time
-- ⚡ Grid stress responses
-
----
-
-## 🔧 Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `docker: command not found` | Install Docker Desktop from [docker.com](https://www.docker.com/products/docker-desktop) |
-| `401 Unauthorized` | Your Hugging Face token is wrong - get a new one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
-| `Connection refused` | Make sure the simulator is running (Docker or `go run main.go`) |
-| Python errors | Run `pip install -r python/requirements.txt` |
-| Model not found | Some models need you to accept terms on Hugging Face first |
-
----
-
-## 🧠 Technical Details
-
-### What the AI Sees (Sensors)
-- Current temperature, electricity price, grid stress level
-- Battery charge level, time of day, pending work deadlines
-- Running energy costs and carbon emissions
-
-### What the AI Controls (Actions)
-- HVAC power level (0-100%)
-- Battery charge/discharge rate
-- When to run batch processes
-- How much load to shed during emergencies
-
-### Reward System
-- ✅ **Bonus**: Saving money, staying comfortable, helping the grid
-- ❌ **Penalty**: Wasting energy, temperature extremes, missing deadlines
-
----
-
-## 🚀 Advanced Usage
-
-**Try different AI models**:
-```powershell
-$env:MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.3"  # Faster but less accurate
-```
-
-**Run longer training**:
 ```bash
-python inference.py --episodes 10 --llm-every 4  # Scale LLM calls via --llm-every; use --fast-mode for tests
-```
-
-**Test the environment manually**:
-```bash
+pip install requests
 python python/validate.py --env-url http://localhost:7860
 ```
 
+### 3. Run baseline inference
+
+On the **host** (not inside the container unless you set `--env-url` to the env server):
+
+```bash
+pip install -r python/requirements.txt
+```
+
+**Windows — PowerShell:**
+
+```powershell
+$env:ENV_URL="http://localhost:7860"
+python inference.py --fast-mode --episodes 1
+```
+
+**Windows — Command Prompt (cmd):**
+
+```bat
+set ENV_URL=http://localhost:7860
+python inference.py --fast-mode --episodes 1
+```
+
+**Linux / macOS:**
+
+```bash
+export ENV_URL=http://localhost:7860
+python inference.py --fast-mode --episodes 1
+```
+
+You can run the same entrypoint directly with `python python/inference.py` (e.g. `python python/inference.py --fast-mode`); flags match the root `inference.py` wrapper.
+
+**LLM baseline** (requires Hugging Face or other OpenAI-compatible API credentials):
+
+```bash
+export ENV_URL=http://localhost:7860
+export API_BASE_URL=https://router.huggingface.co/v1
+export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
+export HF_TOKEN=your_token_here
+python inference.py --episodes 1 --llm-every 4
+```
+
+Results are written to `baseline_scores.json` by default (`--output` to change).
+
 ---
 
-## 📚 Learn More
+## Tasks
 
-- **Reinforcement Learning**: How AI learns through trial and error
-- **Energy Management**: Real-world smart grid technologies
-- **Hugging Face**: Free platform for AI models and datasets
+| ID | Difficulty | Name | Objective |
+|----|------------|------|-----------|
+| 1 | Easy | Cost minimization | Minimize total energy cost over the episode. No temperature or batch-job objectives in the grade. |
+| 2 | Medium | Constrained temperature | Minimize cost while keeping indoor temperature within **±2 °C** of setpoint (19–23 °C) for graded temperature compliance. |
+| 3 | Hard | Full demand response | Minimize cost, maintain temperature, respond to **grid stress** (e.g. shed load when stress is high), complete **batch jobs** on time, and reduce **carbon** vs a baseline policy in the composite score. |
 
-**Happy learning!** 🎉 The AI will surprise you with how well it learns to manage energy.
+Episode **grade** is returned by `GET /grade` after the episode completes (or after a partial run if you stopped stepping early). Sub-scores are task-dependent and documented in code (`env/tasks.go`).
+
+---
+
+## HTTP API
+
+Base URL: `http://<host>:7860` (default in container: port **7860**).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/health` | Liveness; JSON `status`, `version` |
+| GET | `/ping` | Lightweight liveness; JSON `status` |
+| POST | `/reset` | Start episode: body e.g. `{"task_id": 1, "seed": 42, "num_buildings": 1}` |
+| POST | `/step` | Advance one step: JSON action or array of actions (multi-building) |
+| GET | `/state` | Full snapshot: buildings, downsampled price/carbon curves, step, task, etc. |
+| GET | `/grade` | Episode score in `[0, 1]`, sub-scores, exploit flags |
+| GET | `/replay` | Step replay list |
+| GET | `/tasks` | Task metadata and grader weights |
+| GET | `/metrics` | Prometheus-style text metrics |
+
+**Action JSON fields** (single building): `hvac_power_level`, `thermal_charge_rate`, `batch_job_slot`, `load_shed_fraction`, optional `building_id`.
+
+Schemas and primary endpoints: **`openenv.yaml`** at repo root (see Notes for additional endpoints like `/metrics`).
+
+---
+
+## Evaluation modes (`inference.py`)
+
+There is **no** `--judge-mode` flag in this repository. Use the modes below.
+
+| Mode | Command pattern | Behavior |
+|------|-----------------|----------|
+| **Fast (heuristic)** | `python inference.py --fast-mode` | No LLM calls; deterministic given env seed; fastest for CI or smoke tests. |
+| **Default LLM** | `python inference.py` | Uses OpenAI-compatible API (`API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`); default `--llm-every 4` reuses each LLM action for 4 steps to limit API cost. |
+| **Recommended for automated evaluation / judging** | `python inference.py --fast-mode --episodes 1` | Recommended when automated pipelines need **reproducibility** and **no external API** dependency. |
+
+Other useful flags:
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--episodes` | `1` | Episodes per task (tasks 1–3 run in sequence) |
+| `--env-url` | `ENV_URL` or `http://localhost:7860` | Environment base URL |
+| `--llm-every` | `4` | Steps per LLM call (ignored in `--fast-mode`) |
+| `--max-steps` | full episode | Stop after N steps; grade reflects **partial** episode |
+| `--output` | `baseline_scores.json` | Results path |
+| `--verbose` | off | Extra step logs |
+
+---
+
+## Logging format (baseline)
+
+For each episode the script prints, in order:
+
+1. **`[START]`** — episode beginning (after `reset`)  
+2. **`[STEP1]` … `[STEP96]`** (full episode) — one line per successful `POST /step`; a full episode has **96** steps (`[STEP1]` through `[STEP96]`) unless `--max-steps` or an early error stops the loop  
+3. **`[END]`** — after `GET /grade` for that episode  
+
+Additional lines (banners, task headers, `[OK]` / `[WARN]`) may appear; parsers should match the bracketed markers above.
+
+Example shape:
+
+```text
+[START]
+[STEP1]
+[STEP2]
+...
+[STEP96]
+[END]
+```
+
+---
+
+## Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  Client: python inference.py (LLM or heuristic)             │
+│       │ HTTP (reset / step / grade)                         │
+│       ▼                                                     │
+│  ┌──────────────────┐     ┌─────────────────────────────┐ │
+│  │ gridmind-server  │     │  Dashboard (optional)        │ │
+│  │  Go :7860        │◄────│  FastAPI + static UI :7861   │ │
+│  │  env/* simulation│     │  proxies /api → :7860       │ │
+│  └──────────────────┘     └─────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- **Core:** `main.go` + `env/` (physics, rewards, tasks, grading)  
+- **Baseline:** `inference.py` (root) → `python/inference.py`  
+- **Dashboard:** `dashboard/server.py`, `dashboard/static/`  
+- **Spec:** `openenv.yaml`
+
+---
+
+## Docker (detailed)
+
+| Step | Command |
+|------|---------|
+| Build | `docker build -t gridmind-rl .` |
+| Run (foreground) | `docker run --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl` |
+| Run (background) | `docker run -d --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl` |
+| Stop (background) | `docker stop gridmind` |
+| Inference **inside** container | `docker exec -it gridmind python /app/inference.py --fast-mode --env-url http://127.0.0.1:7860` |
+
+The image runs **supervisord** as a non-root user with two programs: Go server (`PORT=7860`) and uvicorn dashboard (`7861`).
+
+---
+
+## Notes for judges and operators
+
+| Topic | Detail |
+|-------|--------|
+| **Ports** | **7860** = environment API; **7861** = dashboard. Some hosts only expose one public port—API is the required one for OpenEnv-style evaluation. |
+| **Episode length** | **96 steps** = 24 h at 15 min/step. Observation `step` is **0–95** for a full episode. |
+| **`openenv.yaml`** | Lists main endpoints; **`/metrics`** exists at runtime but may not appear in the YAML block—treat as an extra ops endpoint. |
+| **Reproducibility** | Env is seed-controlled. LLM outputs may still vary by provider even at `temperature=0`. |
+| **`--max-steps`** | Produces a **partial** episode; final `GET /grade` reflects that partial trajectory. |
+| **Manual run (no Docker)** | Install Go 1.21+, `go run .` from repo root (default port 7860); install Python deps and run `python inference.py` as above. |
+| **Runtime** | The baseline completes within typical hackathon limits (<20 minutes). |
+
+---
+
+## License
+
+See `LICENSE` in the repository.
