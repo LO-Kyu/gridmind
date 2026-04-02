@@ -6,7 +6,7 @@ description: |
   Control HVAC, thermal storage, and schedule batch jobs in response to
   stochastic time-of-use prices and grid stress events.
 
-author: GridMind Team
+author: LOKyu Team
 tags:
   - reinforcement-learning
   - energy
@@ -66,10 +66,16 @@ schemas:
       building_id:
         type: integer
         description: Building identifier for multi-building federation
-  
+
   action:
     type: object
-    required: ["hvac_power_level", "thermal_charge_rate", "batch_job_slot", "load_shed_fraction"]
+    required:
+      [
+        "hvac_power_level",
+        "thermal_charge_rate",
+        "batch_job_slot",
+        "load_shed_fraction",
+      ]
     properties:
       hvac_power_level:
         type: number
