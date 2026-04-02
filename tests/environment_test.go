@@ -55,21 +55,24 @@ func TestStepAdvancesState(t *testing.T) {
 	if state.Step != 1 {
 		t.Errorf("expected step=1 after one step, got %d", state.Step)
 	}
+	if resps[0].Observation.Step != 0 {
+		t.Errorf("expected observation.step=0 after first transition, got %d", resps[0].Observation.Step)
+	}
 }
 
-// TestEpisodeLengthIs288 verifies the episode terminates at step 288.
-func TestEpisodeLengthIs288(t *testing.T) {
+// TestEpisodeLengthIs96 verifies the episode terminates after 96 steps (24h).
+func TestEpisodeLengthIs96(t *testing.T) {
 	e := env.NewEnvironment()
 	var seed int64 = 99
 	e.Reset(env.ResetRequest{Seed: &seed, TaskID: 1, NumBuildings: 1})
 
 	action := []env.ActionModel{{HVACPowerLevel: 0.5}}
 	var lastDone bool
-	for i := 0; i < 288; i++ {
+	for i := 0; i < env.EpisodeSteps; i++ {
 		_, lastDone = e.Step(action)
 	}
 	if !lastDone {
-		t.Errorf("episode should be done after 288 steps")
+		t.Errorf("episode should be done after %d steps", env.EpisodeSteps)
 	}
 }
 
@@ -162,7 +165,7 @@ func TestGraderTask1ScoreRange(t *testing.T) {
 	e.Reset(env.ResetRequest{Seed: &seed, TaskID: 1})
 
 	action := []env.ActionModel{{HVACPowerLevel: 0.3}}
-	for i := 0; i < 288; i++ {
+	for i := 0; i < env.EpisodeSteps; i++ {
 		e.Step(action)
 	}
 
@@ -171,9 +174,14 @@ func TestGraderTask1ScoreRange(t *testing.T) {
 
 	buildings := make([]*env.BuildingState, len(state.Buildings))
 	for i, pub := range state.Buildings {
+		jobsCopy := make([]env.BatchJob, len(pub.Jobs))
+		copy(jobsCopy, pub.Jobs)
 		buildings[i] = &env.BuildingState{
-			CumulativeCost: pub.CumulativeCost,
-			BaselineCost:   pub.BaselineCost,
+			CumulativeCost:   pub.CumulativeCost,
+			BaselineCost:     pub.BaselineCost,
+			CumulativeCarbon: pub.CumulativeCarbon,
+			BaselineCarbon:   pub.BaselineCarbon,
+			Jobs:             jobsCopy,
 		}
 	}
 

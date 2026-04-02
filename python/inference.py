@@ -8,14 +8,15 @@ Usage:
     export API_BASE_URL=https://router.huggingface.co/v1
     export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
     export HF_TOKEN=hf_xxxx
-    python python/inference.py [--episodes 3] [--env-url http://localhost:7860]
+    python inference.py
+    # or: python python/inference.py [--episodes 1] [--llm-every 4] [--fast-mode]
 """
+
+from __future__ import annotations
 
 import argparse
 import json
 import os
-import random
-import re
 import sys
 import time
 from typing import Any
@@ -29,9 +30,12 @@ ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-DEFAULT_EPISODES = 3
-DEFAULT_SEED_BASE = 1000  # episodes use seed BASE+episode_idx for reproducibility
+DEFAULT_EPISODES = 1
+DEFAULT_SEED_BASE = 1000
 MAX_RETRIES = 3
+# 96 steps × 15 min = 24 h (must match env.EpisodeSteps)
+EPISODE_STEPS = 96
+LAST_STEP_INDEX = EPISODE_STEPS - 1
 
 SYSPROMPT = """You are GridMind, an expert industrial energy management controller.
 You control a building's HVAC, thermal storage, batch job scheduling, and load shedding.
@@ -39,9 +43,9 @@ Your goal is to minimize electricity costs while maintaining comfort and meeting
 Always respond with a single valid JSON object matching the action schema. No explanation needed."""
 
 TASK_DESCRIPTIONS = {
-    1: "Task 1 (Easy - Cost Minimization): Minimize total energy cost over 24 hours. No temperature constraints. Use cheap off-peak periods and thermal storage arbitrage.",
+    1: "Task 1 (Easy - Cost Minimization): Minimize total energy cost over 24 hours. No temperature or batch constraints. Use cheap off-peak periods and thermal storage.",
     2: "Task 2 (Medium - Temperature Management): Minimize cost AND keep indoor temperature within 19-23°C at all times. Balance comfort vs cost.",
-    3: "Task 3 (Hard - Full Demand Response): Minimize cost, maintain temperature, respond to grid stress events by shedding load when grid_stress_signal > 0.7, AND schedule all batch jobs before their deadlines.",
+    3: "Task 3 (Hard - Full Demand Response): Minimize cost, maintain temperature, respond to grid stress (shed when grid_stress_signal > 0.7), schedule batch jobs, minimize carbon.",
 }
 
 ACTION_SCHEMA_STR = """{
@@ -53,7 +57,28 @@ ACTION_SCHEMA_STR = """{
 }"""
 
 
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    """Parse first balanced {...} JSON object from text (handles nested braces)."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 # ── Environment client ───────────────────────────────────────────────────────
+
 
 class GridMindEnvClient:
     """Simple HTTP client for the GridMind-RL Go environment server."""
@@ -93,6 +118,7 @@ class GridMindEnvClient:
 
 # ── LLM agent ───────────────────────────────────────────────────────────────
 
+
 class LLMAgent:
     """OpenAI-compatible LLM agent that chooses actions given observations."""
 
@@ -119,7 +145,7 @@ Current observation:
 - Hour of day: {obs.get('hour_of_day', 12)} (0=midnight, peak prices 8-12 and 17-21)
 - Pending batch job deadlines: {obs.get('batch_queue', [])}
 - Cumulative cost so far: ${obs.get('cumulative_cost', 0):.4f}
-- Episode step: {obs.get('step', 0)}/95
+- Episode step: {obs.get('step', 0)}/{LAST_STEP_INDEX}
 
 Strategy hints:
 - Charge thermal storage when price < $0.08/kWh, discharge when price > $0.15/kWh
@@ -139,36 +165,19 @@ Respond with ONLY a JSON action:
                         {"role": "user", "content": prompt},
                     ],
                     max_tokens=128,
-                    temperature=0.1,
+                    temperature=0.0,
                 )
                 content = completion.choices[0].message.content.strip()
-                return self._parse_action(content)
+                parsed = extract_json_object(content)
+                if parsed is not None:
+                    return self._clamp_action(parsed)
+                action = json.loads(content)
+                return self._clamp_action(action)
             except Exception as e:
                 print(f"  [LLM attempt {attempt+1}/{MAX_RETRIES}] error: {e}")
                 time.sleep(1)
 
-        # Fallback: rule-based heuristic
         return self._heuristic_action(obs)
-
-    def _parse_action(self, content: str) -> dict:
-        """Extract and validate JSON action from LLM response."""
-        # Try direct JSON parse
-        try:
-            action = json.loads(content)
-            return self._clamp_action(action)
-        except json.JSONDecodeError:
-            pass
-        # Try to extract JSON block from text
-        match = re.search(r"\{[^}]+\}", content, re.DOTALL)
-        if match:
-            try:
-                action = json.loads(match.group())
-                return self._clamp_action(action)
-            except json.JSONDecodeError:
-                pass
-        # Fallback
-        print(f"  [WARN] could not parse LLM response: {content[:100]}")
-        return self._default_action()
 
     def _clamp_action(self, action: dict) -> dict:
         return {
@@ -180,38 +189,33 @@ Respond with ONLY a JSON action:
         }
 
     def _heuristic_action(self, obs: dict) -> dict:
-        """Simple rule-based heuristic when LLM is unavailable."""
+        """Rule-based policy (deterministic given obs)."""
         price = obs.get("current_price", 0.10)
         stress = obs.get("grid_stress_signal", 0.0)
         temp = obs.get("indoor_temperature", 21.0)
         storage = obs.get("thermal_storage_level", 0.5)
         queue = obs.get("batch_queue", [])
 
-        # HVAC: reduce during peak
         hvac = 0.7 if price < 0.08 else (0.3 if price > 0.15 else 0.5)
-        # Adjust for temperature
         if temp > 23.0:
             hvac = max(hvac, 0.8)
         elif temp < 19.0:
             hvac = min(hvac, 0.2)
 
-        # Storage arbitrage
         charge = 0.0
         if price < 0.07 and storage < 0.8:
             charge = 0.5
         elif price > 0.15 and storage > 0.3:
             charge = -0.5
 
-        # Load shedding
         shed = 0.0
         if stress > 0.7:
             shed = 0.4
         elif stress > 0.5:
             shed = 0.2
 
-        # Batch jobs: schedule soon if deadline approaching
         slot = 2
-        if queue and min(queue) < 10:
+        if queue and min(queue) < 8:
             slot = 0
 
         return {
@@ -223,47 +227,83 @@ Respond with ONLY a JSON action:
         }
 
     def _default_action(self) -> dict:
-        return {"hvac_power_level": 0.5, "thermal_charge_rate": 0.0,
-                "batch_job_slot": 0, "load_shed_fraction": 0.0, "building_id": 0}
+        return {
+            "hvac_power_level": 0.5,
+            "thermal_charge_rate": 0.0,
+            "batch_job_slot": 0,
+            "load_shed_fraction": 0.0,
+            "building_id": 0,
+        }
 
 
 # ── Episode runner ───────────────────────────────────────────────────────────
 
-def run_episode(env_client: GridMindEnvClient, agent: LLMAgent,
-                task_id: int, seed: int, verbose: bool = False) -> dict[str, Any]:
-    """Run a single episode and return grade + metadata."""
+
+def run_episode(
+    env_client: GridMindEnvClient,
+    agent: LLMAgent,
+    task_id: int,
+    seed: int,
+    *,
+    fast_mode: bool,
+    llm_every: int,
+    max_steps: int | None,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Run a single episode and return grade + metadata. Prints [START], [STEPn], [END]."""
     reset_resp = env_client.reset(task_id=task_id, seed=seed)
     obs = reset_resp["observations"][0]
+
+    print("[START]", flush=True)
 
     total_reward = 0.0
     total_steps = 0
     start_time = time.time()
+    step_resp: dict[str, Any] = {}
+    step_limit = EPISODE_STEPS if max_steps is None else min(max_steps, EPISODE_STEPS)
 
-    step_resp = {}
-    _step = 0
+    llm_reuse_remaining = 0
+    cached_action = agent._default_action()
+
     while not step_resp.get("done", False):
-        action = agent.choose_action(obs, task_id)
-        step_resp = env_client.step(action)
-
-        if step_resp is None or "observation" not in step_resp:
-            print(f"  [WARN] step {_step}: server returned invalid response, skipping step")
-            _step += 1
+        if total_steps >= step_limit:
             break
 
-        obs = step_resp["observation"]
-        total_reward += step_resp["reward"]
-        total_steps += 1
+        if fast_mode:
+            action = agent._heuristic_action(obs)
+        else:
+            if llm_reuse_remaining <= 0:
+                cached_action = agent.choose_action(obs, task_id)
+                llm_reuse_remaining = max(1, llm_every)
+            action = cached_action
 
-        if verbose and _step % 16 == 0:
-            print(f"    step={_step:02d} price=${obs['current_price']:.3f} "
-                  f"temp={obs['indoor_temperature']:.1f}°C "
-                  f"stress={obs['grid_stress_signal']:.2f} "
-                  f"cost=${obs['cumulative_cost']:.2f} "
-                  f"reward={step_resp['reward']:.3f}")
-        _step += 1
+        step_resp = env_client.step(action)
+        if step_resp is None or "observation" not in step_resp:
+            print(f"  [WARN] step {total_steps}: invalid step response", flush=True)
+            break
+
+        if not fast_mode:
+            llm_reuse_remaining -= 1
+
+        obs = step_resp["observation"]
+        total_reward += float(step_resp["reward"])
+        total_steps += 1
+        print(f"[STEP{total_steps}]", flush=True)
+
+        if verbose and total_steps % 16 == 0:
+            print(
+                f"    step={total_steps:02d} price=${obs['current_price']:.3f} "
+                f"temp={obs['indoor_temperature']:.1f}°C "
+                f"stress={obs['grid_stress_signal']:.2f} "
+                f"cost=${obs['cumulative_cost']:.2f} "
+                f"reward={step_resp['reward']:.3f}",
+                flush=True,
+            )
 
     elapsed = time.time() - start_time
     grade = env_client.grade()
+
+    print("[END]", flush=True)
 
     return {
         "task_id": task_id,
@@ -279,12 +319,32 @@ def run_episode(env_client: GridMindEnvClient, agent: LLMAgent,
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-def main():
+
+def main() -> None:
     parser = argparse.ArgumentParser(description="GridMind-RL baseline inference")
     parser.add_argument("--episodes", type=int, default=DEFAULT_EPISODES)
     parser.add_argument("--env-url", type=str, default=ENV_URL)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--output", type=str, default="baseline_scores.json")
+    parser.add_argument(
+        "--fast-mode",
+        action="store_true",
+        help="Heuristic policy only (no LLM calls; fastest, fully reproducible).",
+    )
+    parser.add_argument(
+        "--llm-every",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Reuse the same LLM action for N consecutive steps (default: 4).",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Stop after N steps (default: full episode). Grade uses partial episode.",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -293,48 +353,59 @@ def main():
     print(f"  API:   {API_BASE_URL}")
     print(f"  Env:   {args.env_url}")
     print(f"  Episodes per task: {args.episodes}")
+    print(f"  Fast mode: {args.fast_mode} | LLM every: {args.llm_every} steps")
     print("=" * 60)
 
     env_client = GridMindEnvClient(base_url=args.env_url)
 
-    # Wait for env server to be healthy
     print("\nWaiting for environment server...")
     for attempt in range(30):
         if env_client.health():
-            print("  ✓ Environment server is healthy")
+            print("  [OK] Environment server is healthy")
             break
         time.sleep(2)
         if attempt == 29:
-            print("  ✗ Environment server not reachable. Exiting.")
+            print("  [FAIL] Environment server not reachable. Exiting.")
             sys.exit(1)
 
     agent = LLMAgent()
-    all_results = []
+    all_results: list[dict[str, Any]] = []
 
     for task_id in [1, 2, 3]:
-        print(f"\n── Task {task_id}: {TASK_DESCRIPTIONS[task_id][:60]}...")
-        task_scores = []
+        print(f"\n-- Task {task_id}: {TASK_DESCRIPTIONS[task_id][:60]}...")
+        task_scores: list[float] = []
         for ep in range(args.episodes):
             seed = DEFAULT_SEED_BASE + task_id * 100 + ep
             print(f"  Episode {ep+1}/{args.episodes} (seed={seed})")
-            result = run_episode(env_client, agent, task_id=task_id, seed=seed, verbose=args.verbose)
-            task_scores.append(result["score"])
+            result = run_episode(
+                env_client,
+                agent,
+                task_id=task_id,
+                seed=seed,
+                fast_mode=args.fast_mode,
+                llm_every=args.llm_every,
+                max_steps=args.max_steps,
+                verbose=args.verbose,
+            )
+            task_scores.append(float(result["score"]))
             all_results.append(result)
-            print(f"    → score={result['score']:.4f} | reward={result['total_reward']:.3f} | {result['elapsed_sec']:.1f}s")
+            print(
+                f"    → score={result['score']:.4f} | reward={result['total_reward']:.3f} | "
+                f"{result['elapsed_sec']:.1f}s | steps={result['total_steps']}"
+            )
 
         avg_score = sum(task_scores) / len(task_scores)
         print(f"  Task {task_id} average score: {avg_score:.4f}")
 
-    # Score summary table
     print("\n" + "=" * 60)
     print("BASELINE SCORES SUMMARY")
     print("=" * 60)
     print(f"{'Task':<10} {'Model':<30} {'Score':<10} {'Episodes':<10}")
     print("-" * 60)
 
-    task_avgs = {}
+    task_avgs: dict[int, float] = {}
     for task_id in [1, 2, 3]:
-        scores = [r["score"] for r in all_results if r["task_id"] == task_id]
+        scores = [float(r["score"]) for r in all_results if r["task_id"] == task_id]
         avg = sum(scores) / len(scores) if scores else 0.0
         task_avgs[task_id] = avg
         print(f"Task {task_id:<6} {MODEL_NAME:<30} {avg:<10.4f} {len(scores)}")
@@ -343,19 +414,21 @@ def main():
     overall = sum(task_avgs.values()) / len(task_avgs)
     print(f"{'Overall':<10} {'':<30} {overall:<10.4f}")
 
-    # Save results
     output = {
         "model": MODEL_NAME,
         "api_base": API_BASE_URL,
         "episodes_per_task": args.episodes,
         "seed_base": DEFAULT_SEED_BASE,
+        "fast_mode": args.fast_mode,
+        "llm_every": args.llm_every,
+        "max_steps": args.max_steps,
         "task_averages": {str(k): v for k, v in task_avgs.items()},
         "overall_average": overall,
         "all_results": all_results,
     }
-    with open(args.output, "w") as f:
+    with open(args.output, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
-    print(f"\n✓ Results saved to {args.output}")
+    print(f"\n[OK] Results saved to {args.output}")
 
 
 if __name__ == "__main__":

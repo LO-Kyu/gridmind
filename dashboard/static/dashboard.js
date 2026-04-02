@@ -7,7 +7,9 @@
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const POLL_MS        = 500;
-const HISTORY_LEN    = 288;   // 288 steps = full episode
+const EPISODE_STEPS  = 96;    // 24h × 4 steps/h (15-min)
+const HISTORY_LEN    = EPISODE_STEPS;
+const CURVE_POINTS   = 24;    // hourly downsample (EpisodeSteps/4)
 const API_BASE       = '/api';
 const TASK_NAMES = {
   1: 'Task 1 — Cost Minimization (Easy)',
@@ -95,8 +97,8 @@ function makeBarChart(id, labels, datasets) {
 }
 
 // ── Initialise all charts ─────────────────────────────────────────────────────
-const emptyLabels = Array.from({ length: 72 }, (_, i) => `${i}h`);
-const emptyData   = Array(72).fill(null);
+const emptyLabels = Array.from({ length: CURVE_POINTS }, (_, i) => `${i}h`);
+const emptyData   = Array(CURVE_POINTS).fill(null);
 
 // 1. Price curve
 const priceChart = makeLineChart('chart-price',
@@ -306,7 +308,7 @@ function renderGantt(jobs, currentStep) {
     wrap.innerHTML = '<div style="color:var(--text-dim);font-size:0.8rem">No batch jobs in this episode.</div>';
     return;
   }
-  const totalSlots = 288;
+  const totalSlots = EPISODE_STEPS;
   wrap.innerHTML = '';
   jobs.forEach(job => {
     const row = document.createElement('div');
@@ -416,7 +418,7 @@ async function fetchAndUpdate() {
     const hourOfDay = b.hour_of_day || 0;
 
     // ── Header ──
-    document.getElementById('ep-step').textContent = `ep:${state.episode} step:${step}/287`;
+    document.getElementById('ep-step').textContent = `ep:${state.episode} step:${step}/${EPISODE_STEPS - 1}`;
     document.getElementById('task-badge').textContent = TASK_NAMES[state.task_id] || 'Task 1';
 
     // ── KPIs ──
@@ -444,20 +446,19 @@ async function fetchAndUpdate() {
     document.getElementById('kpi-storage').textContent = `${(b.thermal_storage_level * 100).toFixed(1)}`;
 
     // ── Price curve chart ──
-    if (state.price_curve_episode && state.price_curve_episode.length === 72) {
-      const labels = Array.from({ length: 72 }, (_, i) => `${i}:00`);
+    if (state.price_curve_episode && state.price_curve_episode.length === CURVE_POINTS) {
+      const labels = Array.from({ length: CURVE_POINTS }, (_, i) => `${i}:00`);
       priceChart.data.labels = labels;
       priceChart.data.datasets[0].data = state.price_curve_episode;
-      // Current position marker
-      const marker = Array(72).fill(null);
+      const marker = Array(CURVE_POINTS).fill(null);
       marker[Math.floor(step / 4)] = state.price_curve_episode[Math.floor(step / 4)];
       priceChart.data.datasets[1].data = marker;
       priceChart.update('none');
     }
 
     // ── Carbon curve ──
-    if (state.carbon_curve_episode && state.carbon_curve_episode.length === 72) {
-      carbonChart.data.labels = Array.from({ length: 72 }, (_, i) => `${i}:00`);
+    if (state.carbon_curve_episode && state.carbon_curve_episode.length === CURVE_POINTS) {
+      carbonChart.data.labels = Array.from({ length: CURVE_POINTS }, (_, i) => `${i}:00`);
       carbonChart.data.datasets[0].data = state.carbon_curve_episode;
       carbonChart.update('none');
     }

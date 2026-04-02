@@ -50,7 +50,8 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	}
 
 	// ── 4. Deadline Penalty ──────────────────────────────────────────────────
-	if inp.BatchMissed > 0 {
+	// Task 1 is cost-only; batch jobs are not part of the objective.
+	if inp.BatchMissed > 0 && inp.TaskID >= 2 {
 		rc.DeadlinePenalty = -float64(inp.BatchMissed) * 1.5
 	}
 
@@ -115,29 +116,26 @@ func computeGridResponse(stress, shedFraction float64) float64 {
 	return -shedFraction * (0.7 - stress) * 0.3
 }
 
-// computeArbitrageBonus rewards charging storage during cheap periods and
-// discharging during expensive periods.
+// computeArbitrageBonus rewards storage use when current price is low vs recent history
+// (causal: uses only past prices, no future curve leakage).
 func computeArbitrageBonus(chargeRate, currentPrice float64, curve []float64, step int) float64 {
-	// Compute rolling average of future prices (next 8 steps = 2 hours)
-	lookAhead := 8
-	futureSum := 0.0
+	lookBack := 8
+	pastSum := 0.0
 	count := 0
-	for i := step + 1; i <= step+lookAhead && i < len(curve); i++ {
-		futureSum += curve[i]
+	for i := step - lookBack; i < step && i >= 0; i++ {
+		pastSum += curve[i]
 		count++
 	}
 	if count == 0 {
 		return 0.0
 	}
-	futureAvg := futureSum / float64(count)
+	pastAvg := pastSum / float64(count)
 
-	// If current price is lower than future avg → charging is smart → reward
-	if chargeRate > 0 && currentPrice < futureAvg {
-		return chargeRate * (futureAvg - currentPrice) * 2.0
+	if chargeRate > 0 && currentPrice < pastAvg {
+		return chargeRate * (pastAvg - currentPrice) * 2.0
 	}
-	// If current price is higher than future avg → discharging is smart → reward
-	if chargeRate < 0 && currentPrice > futureAvg {
-		return math.Abs(chargeRate) * (currentPrice - futureAvg) * 2.0
+	if chargeRate < 0 && currentPrice > pastAvg {
+		return math.Abs(chargeRate) * (currentPrice - pastAvg) * 2.0
 	}
 	return 0.0
 }

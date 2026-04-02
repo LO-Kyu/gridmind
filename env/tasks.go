@@ -34,7 +34,7 @@ func AllTasks() []TaskConfig {
 			Name:        "Full Demand-Response with Batch Scheduling",
 			Description: "Minimize cost, maintain temperature, respond to grid stress events, schedule all batch jobs before their deadlines, and minimize carbon emissions.",
 			Difficulty:  "hard",
-			Weights:     map[string]float64{"cost": 0.35, "temperature": 0.25, "grid_response": 0.25, "batch_deadline": 0.15},
+			Weights:     map[string]float64{"cost": 0.28, "temperature": 0.20, "grid_response": 0.20, "batch_deadline": 0.12, "carbon": 0.20},
 		},
 	}
 }
@@ -187,17 +187,31 @@ func gradeTask3(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 		batchScore = float64(completedOnTime) / float64(totalJobs)
 	}
 
+	// Carbon sub-score vs baseline always-on policy (same spirit as cost)
+	agentCarbon := 0.0
+	baselineCarbon := 0.0
+	for _, b := range inp.Buildings {
+		agentCarbon += b.CumulativeCarbon
+		baselineCarbon += b.BaselineCarbon
+	}
+	carbonScore := 0.0
+	if baselineCarbon > 0 {
+		carbonScore = math.Max(0, 1.0-agentCarbon/baselineCarbon)
+	}
+
 	grade.SubScores["cost"] = costScore
 	grade.SubScores["temperature"] = tempScore
 	grade.SubScores["grid_response"] = gridScore
 	grade.SubScores["batch_deadline"] = batchScore
+	grade.SubScores["carbon"] = math.Min(1.0, carbonScore)
 
-	// Weighted composite score
-	grade.Score = costScore*0.35 + tempScore*0.25 + gridScore*0.25 + batchScore*0.15
+	grade.Score = costScore*0.28 + tempScore*0.20 + gridScore*0.20 + batchScore*0.12 + carbonScore*0.20
 
 	grade.Details["grid_stress_steps"] = gridStressSteps
 	grade.Details["grid_response_steps"] = gridResponseSteps
 	grade.Details["total_jobs"] = totalJobs
 	grade.Details["completed_on_time"] = completedOnTime
+	grade.Details["agent_carbon"] = agentCarbon
+	grade.Details["baseline_carbon"] = baselineCarbon
 	return grade
 }

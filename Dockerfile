@@ -27,6 +27,7 @@ COPY --from=builder /app/gridmind-server /usr/local/bin/gridmind-server
 
 # Copy Python layer and Dashboard
 COPY python/ ./python/
+COPY inference.py ./inference.py
 COPY dashboard/ ./dashboard/
 COPY data/ ./data/
 COPY openenv.yaml ./

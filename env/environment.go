@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	EpisodeSteps     = 288    // 72 hours × 15-min intervals
+	EpisodeSteps     = 96     // 24 hours × 15-min intervals (96 × 0.25h = 24h)
 	StepDurationHrs  = 0.25  // each step = 15 minutes = 0.25 h
 	MaxBuildings     = 3
 	DefaultSetpoint  = 21.0  // °C comfortable indoor temp
@@ -206,6 +206,7 @@ func (e *Environment) GetState() StateResponse {
 			OutdoorTemperature:  b.OutdoorTemperature,
 			SetpointTemperature: b.SetpointTemperature,
 			BaselineCost:        b.BaselineCost,
+			BaselineCarbon:      b.BaselineCarbon,
 			CumulativeCarbon:    b.CumulativeCarbon,
 			Jobs:                b.Jobs,
 		}
@@ -276,6 +277,7 @@ func (e *Environment) newBuildingState(id int) *BuildingState {
 		OutdoorTemperature:  outdoorTemp,
 		PrevHVACLevel:       0.5,
 		BaselineCost:        0.0,
+		BaselineCarbon:      0.0,
 		SetpointTemperature: DefaultSetpoint,
 		MaxHVACPower:        MaxHVACPowerKW,
 		MaxStorageCapacity:  MaxStorageKWh,
@@ -299,8 +301,12 @@ func (e *Environment) generateBatchJobs() []BatchJob {
 
 	jobs := make([]BatchJob, numJobs)
 	for i := range jobs {
-		// Deadline spread across episode, ensuring feasibility
-		deadline := 20 + e.rng.Intn(60)
+		// Deadline spread across episode (leave slack at end for duration)
+		span := EpisodeSteps - 12
+		if span < 8 {
+			span = 8
+		}
+		deadline := 4 + e.rng.Intn(span)
 		jobs[i] = BatchJob{
 			ID:           i + 1,
 			DeadlineSlot: deadline,
@@ -438,9 +444,10 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 	// Baseline (always-on at 70% HVAC, no storage/shedding)
 	baselineKW := 0.7*b.MaxHVACPower + b.ProcessDemand
 	baselineEnergy := baselineKW * StepDurationHrs
-	b.BaselineCost += baselineEnergy * b.CurrentPrice
+		b.BaselineCost += baselineEnergy * b.CurrentPrice
+		b.BaselineCarbon += baselineEnergy * b.CarbonIntensity
 
-	// ----- Reward computation -----
+		// ----- Reward computation -----
 	rc := ComputeReward(ComputeRewardInput{
 		B:               b,
 		Act:             act,
@@ -478,6 +485,9 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 			}
 		}
 	}
+
+	// Per-building step index matches global timestep for this transition (0 .. EpisodeSteps-1)
+	b.Step = s
 
 	// Record history
 	if idx < len(e.TempHistory) {

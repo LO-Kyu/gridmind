@@ -62,7 +62,7 @@ schemas:
         type: integer
         minimum: 0
         maximum: 95
-        description: Current episode step (15-min intervals)
+        description: Current episode step index (0–95); 96 steps = 24 hours at 15-min resolution
       building_id:
         type: integer
         description: Building identifier for multi-building federation
@@ -103,7 +103,7 @@ schemas:
 
   reward:
     type: number
-    description: Dense multi-component reward combining cost savings, temperature constraints, grid response, and deadlines.
+    description: Dense multi-component reward (cost, optional temperature/grid/carbon/deadlines) task-gated to match objectives.
 
 tasks:
   - id: 1
@@ -122,6 +122,9 @@ tasks:
 endpoints:
   health:
     path: /health
+    method: GET
+  ping:
+    path: /ping
     method: GET
   reset:
     path: /reset

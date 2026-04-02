@@ -135,6 +135,7 @@ func newServer() *Server {
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/ping", s.handlePing)
 	mux.HandleFunc("/reset", s.handleReset)
 	mux.HandleFunc("/step", s.handleStep)
 	mux.HandleFunc("/state", s.handleState)
@@ -151,6 +152,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "1.0.0"})
+}
+
+func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // ── /reset ───────────────────────────────────────────────────────────────────
@@ -280,9 +287,14 @@ func (s *Server) handleGrade(w http.ResponseWriter, r *http.Request) {
 	// Build building states from public state
 	buildings := make([]*env.BuildingState, len(state.Buildings))
 	for i, pub := range state.Buildings {
+		jobsCopy := make([]env.BatchJob, len(pub.Jobs))
+		copy(jobsCopy, pub.Jobs)
 		buildings[i] = &env.BuildingState{
-			CumulativeCost: pub.CumulativeCost,
-			BaselineCost:   pub.BaselineCost,
+			CumulativeCost:   pub.CumulativeCost,
+			BaselineCost:     pub.BaselineCost,
+			CumulativeCarbon: pub.CumulativeCarbon,
+			BaselineCarbon:   pub.BaselineCarbon,
+			Jobs:             jobsCopy,
 		}
 	}
 
@@ -342,7 +354,7 @@ func main() {
 	srv.envMgr.Reset(env.ResetRequest{Seed: &seed, TaskID: 1, NumBuildings: 1})
 
 	log.Printf("GridMind-RL environment server starting on :%s", port)
-	log.Printf("Endpoints: GET /health /state /replay /grade /tasks /metrics | POST /reset /step")
+	log.Printf("Endpoints: GET /health /ping /state /replay /grade /tasks /metrics | POST /reset /step")
 
 	mux := withCORS(withLogging(srv.routes()))
 	if err := http.ListenAndServe(":"+port, mux); err != nil {

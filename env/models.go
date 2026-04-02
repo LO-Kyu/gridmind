@@ -27,7 +27,7 @@ type BuildingState struct {
 
 	// Temporal
 	HourOfDay            int     `json:"hour_of_day"`            // 0–23
-	Step                 int     `json:"step"`                   // 0–95 within episode
+	Step                 int     `json:"step"`                   // 0–95 within a 96-step (24h) episode
 
 	// Batch job queue: pending deadlines (raw slots)
 	BatchQueue           []int   `json:"batch_queue"`            // deadline slots of pending jobs
@@ -41,6 +41,7 @@ type BuildingState struct {
 	OutdoorTemperature   float64    `json:"-"` // °C for weather perturbation
 	PrevHVACLevel        float64    `json:"-"` // for stability penalty
 	BaselineCost         float64    `json:"-"` // always-on policy running cost
+	BaselineCarbon       float64    `json:"-"` // baseline policy gCO2 (for grading)
 	SetpointTemperature  float64    `json:"-"` // target indoor temp (°C)
 	MaxHVACPower         float64    `json:"-"` // kW
 	MaxStorageCapacity   float64    `json:"-"` // kWh
@@ -139,6 +140,7 @@ type BuildingStatePublic struct {
 	OutdoorTemperature  float64    `json:"outdoor_temperature"`
 	SetpointTemperature float64    `json:"setpoint_temperature"`
 	BaselineCost        float64    `json:"baseline_cost"`
+	BaselineCarbon      float64    `json:"baseline_carbon"`
 	CumulativeCarbon    float64    `json:"cumulative_carbon"`
 	Jobs                []BatchJob `json:"jobs"`
 	// History for chart rendering

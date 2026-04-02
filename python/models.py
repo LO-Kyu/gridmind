@@ -29,7 +29,7 @@ class ObservationModel(BaseModel):
     hour_of_day: int = Field(..., ge=0, le=23, description="Current hour of day (0–23)")
     batch_queue: List[int] = Field(default_factory=list, description="Deadline slots of pending batch jobs")
     cumulative_cost: float = Field(..., ge=0.0, description="Running energy cost this episode ($)")
-    step: int = Field(..., ge=0, description="Current timestep (0–287)")
+    step: int = Field(..., ge=0, le=95, description="Current timestep (0–95); 96 steps = 24h")
     building_id: int = Field(default=0, description="Building index in federation")
 
 

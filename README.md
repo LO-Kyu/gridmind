@@ -10,7 +10,7 @@
 
 1. **Get a free AI API key** from [Hugging Face](https://huggingface.co/join) (takes 2 minutes)
 2. **Run the simulator**: `docker run -p 7860:7860 -p 7861:7861 ghcr.io/your-repo/gridmind-rl:latest`
-3. **Watch the AI learn**: `python python/inference.py --episodes 1`
+3. **Watch the AI learn**: `python inference.py --episodes 1` (or `--fast-mode` for a quick heuristic run, no API calls)
 
 That's it! The AI will start making energy decisions and you'll see live results.
 
@@ -122,7 +122,7 @@ export HF_TOKEN=hf_your_token_here
 
 ```bash
 # Run 3 learning episodes (takes ~5 minutes)
-python python/inference.py --episodes 3
+python inference.py --episodes 3
 ```
 
 You'll see output like:
@@ -202,7 +202,7 @@ $env:MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.3"  # Faster but less accura
 
 **Run longer training**:
 ```bash
-python python/inference.py --episodes 10  # Takes ~30 minutes
+python inference.py --episodes 10 --llm-every 4  # Scale LLM calls via --llm-every; use --fast-mode for tests
 ```
 
 **Test the environment manually**:

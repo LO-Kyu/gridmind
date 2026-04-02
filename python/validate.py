@@ -16,16 +16,16 @@ import requests
 
 ENV_URL = "http://localhost:7860"
 
-PASS = "✓"
-FAIL = "✗"
-WARN = "⚠"
+PASS = "[OK]"
+FAIL = "[FAIL]"
+WARN = "[WARN]"
 
 
 def check(label: str, condition: bool, detail: str = "") -> bool:
     icon = PASS if condition else FAIL
     line = f"  {icon} {label}"
     if detail:
-        line += f" — {detail}"
+        line += f" - {detail}"
     print(line)
     return condition
 
@@ -42,20 +42,22 @@ def validate(env_url: str) -> bool:
     base = env_url.rstrip("/")
     results = []
 
-    print("\n══════════════════════════════════════════")
+    print("\n" + "=" * 50)
     print("  GridMind-RL OpenEnv Validation Report")
-    print("══════════════════════════════════════════\n")
+    print("=" * 50 + "\n")
 
-    # ── 1. Health endpoint ──────────────────────────────────────────────────
-    print("1. Health Endpoint")
+    # ── 1. Health & ping ─────────────────────────────────────────────────────
+    print("1. Health & Ping")
     try:
         r = get(f"{base}/health")
         results.append(check("GET /health returns 200", r.status_code == 200, f"got {r.status_code}"))
         data = r.json()
         results.append(check("Response has 'status' field", "status" in data))
+        rp = get(f"{base}/ping")
+        results.append(check("GET /ping returns 200", rp.status_code == 200, f"got {rp.status_code}"))
     except Exception as e:
         results.append(check("GET /health reachable", False, str(e)))
-        print(f"\n  ✗ Cannot reach server at {base}. Is it running?\n")
+        print(f"\n  [FAIL] Cannot reach server at {base}. Is it running?\n")
         return False
 
     # ── 2. Reset endpoint ───────────────────────────────────────────────────
@@ -122,7 +124,8 @@ def validate(env_url: str) -> bool:
 
         rc = info.get("reward_components", {})
         rc_fields = ["cost_savings", "temp_constraint", "grid_response",
-                     "deadline_penalty", "efficiency_bonus", "stability_penalty", "total"]
+                     "deadline_penalty", "efficiency_bonus", "stability_penalty",
+                     "carbon_reward", "total"]
         for f in rc_fields:
             results.append(check(f"reward_components has '{f}'", f in rc))
 
@@ -139,14 +142,15 @@ def validate(env_url: str) -> bool:
         r = get(f"{base}/state")
         results.append(check("GET /state returns 200", r.status_code == 200))
         state = r.json()
-        state_fields = ["buildings", "price_curve_24h", "carbon_curve_24h",
+        state_fields = ["buildings", "price_curve_episode", "carbon_curve_episode",
                         "episode", "step", "task_id", "done", "seed"]
         for f in state_fields:
             results.append(check(f"state has '{f}'", f in state))
-        results.append(check("price_curve_24h has 24 entries",
-                             len(state.get("price_curve_24h", [])) == 24))
-        results.append(check("carbon_curve_24h has 24 entries",
-                             len(state.get("carbon_curve_24h", [])) == 24))
+        curve_n = 24  # EpisodeSteps/4 (96/4) downsamples to hourly points
+        results.append(check("price_curve_episode has 24 entries",
+                             len(state.get("price_curve_episode", [])) == curve_n))
+        results.append(check("carbon_curve_episode has 24 entries",
+                             len(state.get("carbon_curve_episode", [])) == curve_n))
     except Exception as e:
         results.append(check("GET /state succeeds", False, str(e)))
 
@@ -240,13 +244,13 @@ def validate(env_url: str) -> bool:
     total = len(results)
     pct = 100 * passed // total if total > 0 else 0
 
-    print(f"\n══════════════════════════════════════════")
+    print(f"\n" + "=" * 50)
     print(f"  Result: {passed}/{total} checks passed ({pct}%)")
     if passed == total:
-        print("  🎉 ALL CHECKS PASSED — Ready for submission!")
+        print("  ALL CHECKS PASSED - Ready for submission!")
     else:
-        print(f"  ⚠  {total - passed} checks failed. Fix errors above.")
-    print("══════════════════════════════════════════\n")
+        print(f"  {total - passed} checks failed. Fix errors above.")
+    print("=" * 50 + "\n")
 
     return passed == total
 

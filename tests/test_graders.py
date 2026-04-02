@@ -135,7 +135,7 @@ class TestTask3:
 
     def test_has_all_sub_scores(self):
         g = run_full_episode(task_id=3, seed=31)
-        for key in ["cost", "temperature", "grid_response", "batch_deadline"]:
+        for key in ["cost", "temperature", "grid_response", "batch_deadline", "carbon"]:
             assert key in g["sub_scores"], f"Missing sub-score: {key}"
 
     def test_all_sub_scores_in_range(self):
@@ -146,7 +146,13 @@ class TestTask3:
     def test_weights_sum_correct(self):
         g = run_full_episode(task_id=3, seed=33)
         ss = g["sub_scores"]
-        expected = ss["cost"]*0.35 + ss["temperature"]*0.25 + ss["grid_response"]*0.25 + ss["batch_deadline"]*0.15
+        expected = (
+            ss["cost"] * 0.28
+            + ss["temperature"] * 0.20
+            + ss["grid_response"] * 0.20
+            + ss["batch_deadline"] * 0.12
+            + ss["carbon"] * 0.20
+        )
         assert abs(g["score"] - expected) < 0.01 or g["exploit_detected"]
 
     def test_grid_response_sub_score(self):

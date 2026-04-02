@@ -1,0 +1,58 @@
+{
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "api_base": "https://router.huggingface.co/v1",
+  "episodes_per_task": 1,
+  "seed_base": 1000,
+  "fast_mode": true,
+  "llm_every": 4,
+  "max_steps": null,
+  "task_averages": {
+    "1": 0.2776,
+    "2": 0.2182,
+    "3": 0.3115
+  },
+  "overall_average": 0.2691,
+  "all_results": [
+    {
+      "task_id": 1,
+      "seed": 1100,
+      "total_reward": -54.91106240679752,
+      "total_steps": 96,
+      "elapsed_sec": 0.8684265613555908,
+      "score": 0.2776,
+      "sub_scores": {
+        "cost": 0.277555958007489
+      },
+      "exploit_detected": false
+    },
+    {
+      "task_id": 2,
+      "seed": 1200,
+      "total_reward": -573.2793620498348,
+      "total_steps": 96,
+      "elapsed_sec": 0.9907081127166748,
+      "score": 0.2182,
+      "sub_scores": {
+        "cost": 0.2595566056450961,
+        "temperature": 0.15625
+      },
+      "exploit_detected": false
+    },
+    {
+      "task_id": 3,
+      "seed": 1300,
+      "total_reward": -670.8653705366278,
+      "total_steps": 96,
+      "elapsed_sec": 0.8988945484161377,
+      "score": 0.3115,
+      "sub_scores": {
+        "batch_deadline": 1,
+        "carbon": 0.24377839161166936,
+        "cost": 0.25263438913936676,
+        "grid_response": 0.21428571428571427,
+        "temperature": 0.14583333333333334
+      },
+      "exploit_detected": false
+    }
+  ]
+}
