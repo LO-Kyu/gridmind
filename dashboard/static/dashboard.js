@@ -1,6 +1,6 @@
 /**
- * GridMind-RL Dashboard — Chart.js real-time visualization
- * Polls /api/state every 500ms and updates all charts.
+ * GridMind-RL Dashboard — Premium Chart.js real-time visualization
+ * Polls /api/state every 500ms and updates all charts + KPIs.
  */
 
 'use strict';
@@ -21,23 +21,30 @@ let currentBuilding = 0;
 let pollTimer = null;
 let connected = false;
 
-// ── Chart.js global defaults ─────────────────────────────────────────────────
-Chart.defaults.color = '#8899b4';
-Chart.defaults.borderColor = 'rgba(56,139,253,0.1)';
-Chart.defaults.font.family = "'Inter', sans-serif";
+// ── Chart.js Premium Theme ──────────────────────────────────────────────────
+Chart.defaults.color = '#5a6478';
+Chart.defaults.borderColor = 'rgba(255,255,255,0.03)';
+Chart.defaults.font.family = "'Inter', -apple-system, system-ui, sans-serif";
 Chart.defaults.font.size = 11;
+Chart.defaults.font.weight = 400;
 Chart.defaults.plugins.legend.display = false;
-Chart.defaults.animation.duration = 300;
+Chart.defaults.animation.duration = 350;
+Chart.defaults.animation.easing = 'easeOutQuart';
+Chart.defaults.elements.line.borderCapStyle = 'round';
+Chart.defaults.elements.line.borderJoinStyle = 'round';
 
-const COLORS = {
-  blue:   '#388bfd',
-  green:  '#3fb950',
-  amber:  '#d29922',
-  red:    '#f85149',
-  purple: '#bc8cff',
-  cyan:   '#39d0d8',
-  orange: '#ff7c39',
-  dimBlue: 'rgba(56,139,253,0.15)',
+const C = {
+  blue:    '#5b9cf6',
+  green:   '#4ade80',
+  amber:   '#f5a623',
+  red:     '#f06e6e',
+  purple:  '#a78bfa',
+  cyan:    '#34d4e4',
+  orange:  '#fb923c',
+  teal:    '#2dd4bf',
+  rose:    '#fb7185',
+  grid:    'rgba(255,255,255,0.025)',
+  surface: '#1a1f2e',
 };
 
 function rgba(hex, alpha) {
@@ -47,53 +54,127 @@ function rgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-// ── Chart factory helpers ────────────────────────────────────────────────────
+// ── Chart factory — refined styling ──────────────────────────────────────────
 function makeLineChart(id, labels, datasets, opts = {}) {
-  const ctx = document.getElementById(id).getContext('2d');
-  return new Chart(ctx, {
+  const ctx = document.getElementById(id);
+  if (!ctx) return null;
+  return new Chart(ctx.getContext('2d'), {
     type: 'line',
     data: { labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
+      layout: { padding: { top: 4, right: 4, bottom: 0, left: 4 } },
       scales: {
-        x: { grid: { color: 'rgba(56,139,253,0.06)' }, ticks: { maxTicksLimit: 8 } },
-        y: { grid: { color: 'rgba(56,139,253,0.06)' }, ...opts.yAxis },
+        x: {
+          grid: { color: C.grid, drawBorder: false },
+          ticks: {
+            maxTicksLimit: 8,
+            font: { size: 10, family: "'JetBrains Mono', monospace" },
+            color: '#3d4558',
+            padding: 4,
+          },
+          border: { display: false },
+        },
+        y: {
+          grid: { color: C.grid, drawBorder: false },
+          ticks: {
+            font: { size: 10, family: "'JetBrains Mono', monospace" },
+            color: '#3d4558',
+            padding: 8,
+          },
+          border: { display: false },
+          ...opts.yAxis,
+        },
       },
       plugins: {
-        legend: { display: opts.legend || false },
-        tooltip: { backgroundColor: '#0f1829', borderColor: 'rgba(56,139,253,0.3)', borderWidth: 1 },
+        legend: {
+          display: opts.legend || false,
+          position: 'bottom',
+          labels: {
+            usePointStyle: true,
+            pointStyle: 'circle',
+            padding: 16,
+            font: { size: 10, weight: 500 },
+            color: '#8a94a8',
+          },
+        },
+        tooltip: {
+          backgroundColor: '#12151e',
+          titleColor: '#e8ecf4',
+          bodyColor: '#8a94a8',
+          borderColor: 'rgba(255,255,255,0.08)',
+          borderWidth: 1,
+          cornerRadius: 8,
+          padding: 10,
+          displayColors: true,
+          boxPadding: 4,
+          titleFont: { size: 11, weight: 600 },
+          bodyFont: { size: 11 },
+        },
       },
       ...opts.extra,
     },
   });
 }
 
-function makeAreaChart(id, labels, datasets) {
-  return makeLineChart(id, labels, datasets, {
-    extra: { fill: true },
-  });
-}
-
 function makeBarChart(id, labels, datasets) {
-  const ctx = document.getElementById(id).getContext('2d');
-  return new Chart(ctx, {
+  const ctx = document.getElementById(id);
+  if (!ctx) return null;
+  return new Chart(ctx.getContext('2d'), {
     type: 'bar',
     data: { labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      layout: { padding: { top: 4, right: 4, bottom: 0, left: 4 } },
       scales: {
-        x: { stacked: true, grid: { color: 'rgba(56,139,253,0.06)' }, ticks: { maxTicksLimit: 8 } },
-        y: { stacked: true, grid: { color: 'rgba(56,139,253,0.06)' } },
+        x: {
+          stacked: true,
+          grid: { color: C.grid, drawBorder: false },
+          ticks: { maxTicksLimit: 8, font: { size: 10, family: "'JetBrains Mono', monospace" }, color: '#3d4558' },
+          border: { display: false },
+        },
+        y: {
+          stacked: true,
+          grid: { color: C.grid, drawBorder: false },
+          ticks: { font: { size: 10, family: "'JetBrains Mono', monospace" }, color: '#3d4558' },
+          border: { display: false },
+        },
       },
       plugins: {
-        legend: { display: true, position: 'bottom', labels: { usePointStyle: true, padding: 10 } },
-        tooltip: { backgroundColor: '#0f1829', borderColor: 'rgba(56,139,253,0.3)', borderWidth: 1 },
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: {
+            usePointStyle: true,
+            pointStyle: 'circle',
+            padding: 16,
+            font: { size: 10, weight: 500 },
+            color: '#8a94a8',
+          },
+        },
+        tooltip: {
+          backgroundColor: '#12151e',
+          titleColor: '#e8ecf4',
+          bodyColor: '#8a94a8',
+          borderColor: 'rgba(255,255,255,0.08)',
+          borderWidth: 1,
+          cornerRadius: 8,
+          padding: 10,
+        },
       },
     },
   });
+}
+
+// ── Gradient helper ──────────────────────────────────────────────────────────
+function createGradient(ctx, hex, startAlpha, endAlpha) {
+  const gradient = ctx.createLinearGradient(0, 0, 0, ctx.canvas.clientHeight);
+  gradient.addColorStop(0, rgba(hex, startAlpha));
+  gradient.addColorStop(1, rgba(hex, endAlpha));
+  return gradient;
 }
 
 // ── Initialise all charts ─────────────────────────────────────────────────────
@@ -107,8 +188,8 @@ const priceChart = makeLineChart('chart-price',
     {
       label: 'Price ($/kWh)',
       data: [...emptyData],
-      borderColor: COLORS.amber,
-      backgroundColor: rgba(COLORS.amber, 0.15),
+      borderColor: C.amber,
+      backgroundColor: rgba(C.amber, 0.08),
       borderWidth: 2,
       fill: true,
       tension: 0.4,
@@ -117,14 +198,16 @@ const priceChart = makeLineChart('chart-price',
     {
       label: 'Current',
       data: [...emptyData],
-      borderColor: COLORS.red,
+      borderColor: C.red,
       backgroundColor: 'transparent',
       borderWidth: 0,
-      pointRadius: 6,
-      pointBackgroundColor: COLORS.red,
+      pointRadius: 5,
+      pointBackgroundColor: C.red,
+      pointBorderColor: rgba(C.red, 0.3),
+      pointBorderWidth: 6,
     },
   ],
-  { legend: true, yAxis: { title: { display: true, text: '$/kWh' } } }
+  { legend: true, yAxis: { title: { display: true, text: '$/kWh', color: '#3d4558', font: { size: 10 } } } }
 );
 
 // 2. Temperature
@@ -134,8 +217,8 @@ const tempChart = makeLineChart('chart-temp',
     {
       label: 'Indoor Temp (°C)',
       data: [],
-      borderColor: COLORS.cyan,
-      backgroundColor: rgba(COLORS.cyan, 0.1),
+      borderColor: C.cyan,
+      backgroundColor: rgba(C.cyan, 0.06),
       borderWidth: 2,
       fill: true,
       tension: 0.4,
@@ -144,33 +227,33 @@ const tempChart = makeLineChart('chart-temp',
     {
       label: 'T_max (23°C)',
       data: [],
-      borderColor: rgba(COLORS.red, 0.5),
+      borderColor: rgba(C.red, 0.35),
       borderWidth: 1,
-      borderDash: [5, 5],
+      borderDash: [4, 4],
       pointRadius: 0,
       fill: false,
     },
     {
       label: 'T_min (19°C)',
       data: [],
-      borderColor: rgba(COLORS.blue, 0.5),
+      borderColor: rgba(C.blue, 0.35),
       borderWidth: 1,
-      borderDash: [5, 5],
+      borderDash: [4, 4],
       pointRadius: 0,
       fill: false,
     },
   ],
-  { legend: true, yAxis: { suggestedMin: 15, suggestedMax: 30, title: { display: true, text: '°C' } } }
+  { legend: true, yAxis: { suggestedMin: 15, suggestedMax: 30, title: { display: true, text: '°C', color: '#3d4558', font: { size: 10 } } } }
 );
 
-// 3. Storage history (mini)
+// 3. Storage history
 const storageChart = makeLineChart('chart-storage',
   [],
   [{
     label: 'Storage Level',
     data: [],
-    borderColor: COLORS.cyan,
-    backgroundColor: rgba(COLORS.cyan, 0.2),
+    borderColor: C.teal,
+    backgroundColor: rgba(C.teal, 0.1),
     borderWidth: 2,
     fill: true,
     tension: 0.4,
@@ -179,23 +262,25 @@ const storageChart = makeLineChart('chart-storage',
   { yAxis: { min: 0, max: 1 } }
 );
 
-// 4. HVAC + Load Shed stacked area
+// 4. HVAC + Load Shed
 const hvacChart = makeBarChart('chart-hvac',
   [],
   [
     {
       label: 'HVAC Power',
       data: [],
-      backgroundColor: rgba(COLORS.blue, 0.7),
-      borderColor: COLORS.blue,
+      backgroundColor: rgba(C.blue, 0.6),
+      borderColor: C.blue,
       borderWidth: 1,
+      borderRadius: 3,
     },
     {
       label: 'Load Shed',
       data: [],
-      backgroundColor: rgba(COLORS.red, 0.7),
-      borderColor: COLORS.red,
+      backgroundColor: rgba(C.red, 0.6),
+      borderColor: C.red,
       borderWidth: 1,
+      borderRadius: 3,
     },
   ]
 );
@@ -207,8 +292,8 @@ const costChart = makeLineChart('chart-cost',
     {
       label: 'Agent Cost ($)',
       data: [],
-      borderColor: COLORS.green,
-      backgroundColor: rgba(COLORS.green, 0.1),
+      borderColor: C.green,
+      backgroundColor: rgba(C.green, 0.06),
       borderWidth: 2,
       fill: true,
       tension: 0.4,
@@ -217,25 +302,25 @@ const costChart = makeLineChart('chart-cost',
     {
       label: 'Baseline ($)',
       data: [],
-      borderColor: rgba(COLORS.amber, 0.7),
-      borderDash: [6, 3],
+      borderColor: rgba(C.amber, 0.6),
+      borderDash: [5, 3],
       borderWidth: 2,
       fill: false,
       tension: 0.4,
       pointRadius: 0,
     },
   ],
-  { legend: true, yAxis: { title: { display: true, text: '$' } } }
+  { legend: true, yAxis: { title: { display: true, text: '$', color: '#3d4558', font: { size: 10 } } } }
 );
 
-// 6. Grid stress history (mini)
+// 6. Grid stress history
 const stressChart = makeLineChart('chart-stress',
   [],
   [{
     label: 'Grid Stress',
     data: [],
-    borderColor: COLORS.red,
-    backgroundColor: rgba(COLORS.red, 0.2),
+    borderColor: C.red,
+    backgroundColor: rgba(C.red, 0.1),
     borderWidth: 2,
     fill: true,
     tension: 0.4,
@@ -250,28 +335,36 @@ const carbonChart = makeLineChart('chart-carbon',
   [{
     label: 'Carbon Intensity (gCO₂/kWh)',
     data: [...emptyData],
-    borderColor: COLORS.orange,
-    backgroundColor: rgba(COLORS.orange, 0.15),
+    borderColor: C.orange,
+    backgroundColor: rgba(C.orange, 0.08),
     borderWidth: 2,
     fill: true,
     tension: 0.4,
     pointRadius: 0,
   }],
-  { yAxis: { title: { display: true, text: 'gCO₂/kWh' } } }
+  { yAxis: { title: { display: true, text: 'gCO₂/kWh', color: '#3d4558', font: { size: 10 } } } }
 );
 
-// 8. Reward timeline curve
+// 8. Reward timeline
 const rewardChart = makeLineChart('chart-reward',
   [],
-  [
-    { label: 'Step Reward',   data: [], borderColor: COLORS.green, backgroundColor: rgba(COLORS.green, 0.1), borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 },
-  ],
-  { yAxis: { title: { display: true, text: 'Reward' } } }
+  [{
+    label: 'Step Reward',
+    data: [],
+    borderColor: C.green,
+    backgroundColor: rgba(C.green, 0.06),
+    borderWidth: 2,
+    fill: true,
+    tension: 0.4,
+    pointRadius: 0,
+  }],
+  { yAxis: { title: { display: true, text: 'Reward', color: '#3d4558', font: { size: 10 } } } }
 );
 
 // ── Stress meter bars ────────────────────────────────────────────────────────
 function buildStressMeter() {
   const el = document.getElementById('stress-meter');
+  if (!el) return;
   el.innerHTML = '';
   for (let i = 0; i < 20; i++) {
     const bar = document.createElement('div');
@@ -291,12 +384,12 @@ function updateStressMeter(stress) {
     const pct = (i / bars) * 100;
     bar.style.height = `${20 + pct * 0.8}%`;
     if (i < active) {
-      const color = stress > 0.7 ? COLORS.red : stress > 0.4 ? COLORS.amber : COLORS.green;
+      const color = stress > 0.7 ? C.red : stress > 0.4 ? C.amber : C.green;
       bar.style.background = color;
-      bar.style.opacity = '1';
+      bar.style.boxShadow = `0 0 6px ${rgba(color === C.red ? C.red : color === C.amber ? C.amber : C.green, 0.3)}`;
     } else {
-      bar.style.background = 'rgba(255,255,255,0.05)';
-      bar.style.opacity = '1';
+      bar.style.background = 'rgba(255,255,255,0.03)';
+      bar.style.boxShadow = 'none';
     }
   }
 }
@@ -304,8 +397,9 @@ function updateStressMeter(stress) {
 // ── Batch Gantt renderer ─────────────────────────────────────────────────────
 function renderGantt(jobs, currentStep) {
   const wrap = document.getElementById('gantt-wrap');
+  if (!wrap) return;
   if (!jobs || jobs.length === 0) {
-    wrap.innerHTML = '<div style="color:var(--text-dim);font-size:0.8rem">No batch jobs in this episode.</div>';
+    wrap.innerHTML = '<div class="gantt-empty">No batch jobs in this episode</div>';
     return;
   }
   const totalSlots = EPISODE_STEPS;
@@ -344,7 +438,7 @@ function renderGantt(jobs, currentStep) {
     // Current step marker
     const curPct = (currentStep / totalSlots) * 100;
     const curMarker = document.createElement('div');
-    curMarker.style.cssText = `position:absolute;top:0;bottom:0;width:1px;background:rgba(56,139,253,0.6);left:${curPct}%`;
+    curMarker.style.cssText = `position:absolute;top:2px;bottom:2px;width:2px;background:rgba(91,156,246,0.5);left:${curPct}%;border-radius:1px;box-shadow:0 0 4px rgba(91,156,246,0.3)`;
     track.appendChild(curMarker);
 
     row.appendChild(track);
@@ -367,27 +461,28 @@ function renderGantt(jobs, currentStep) {
 function renderRewardRows(rc) {
   if (!rc) return;
   const container = document.getElementById('reward-rows');
+  if (!container) return;
   const components = [
-    { key: 'cost_savings',      label: 'Cost Savings',  color: COLORS.green,  sign: 1 },
-    { key: 'temp_constraint',   label: 'Temp Constr.',  color: COLORS.cyan,   sign: 1 },
-    { key: 'grid_response',     label: 'Grid DR',       color: COLORS.blue,   sign: 1 },
-    { key: 'efficiency_bonus',  label: 'Efficiency',    color: COLORS.purple, sign: 1 },
-    { key: 'stability_penalty', label: 'Stability',     color: COLORS.amber,  sign: -1 },
-    { key: 'deadline_penalty',  label: 'Deadlines',     color: COLORS.red,    sign: -1 },
-    { key: 'carbon_reward',     label: 'Carbon',        color: COLORS.orange, sign: 1 },
+    { key: 'cost_savings',      label: 'Cost Savings',  color: C.green },
+    { key: 'temp_constraint',   label: 'Temp Constr.',  color: C.cyan },
+    { key: 'grid_response',     label: 'Grid DR',       color: C.blue },
+    { key: 'efficiency_bonus',  label: 'Efficiency',    color: C.purple },
+    { key: 'stability_penalty', label: 'Stability',     color: C.amber },
+    { key: 'deadline_penalty',  label: 'Deadlines',     color: C.red },
+    { key: 'carbon_reward',     label: 'Carbon',        color: C.orange },
   ];
   container.innerHTML = '';
   components.forEach(c => {
     const val = rc[c.key] || 0;
     const absVal = Math.abs(val);
-    const pct = Math.min(100, absVal * 30); // scale 0–~3 reward to 0–100%
+    const pct = Math.min(100, absVal * 30);
     container.innerHTML += `
       <div class="reward-row">
         <div class="reward-label">${c.label}</div>
-        <div class="reward-bar-wrap">
-          <div class="reward-bar" style="width:${pct}%;background:${c.color};opacity:0.8"></div>
+        <div class="reward-bar-track">
+          <div class="reward-bar" style="width:${pct}%;background:${c.color};opacity:0.7"></div>
         </div>
-        <div class="reward-val" style="color:${val >= 0 ? COLORS.green : COLORS.red}">${val.toFixed(3)}</div>
+        <div class="reward-val" style="color:${val >= 0 ? C.green : C.red}">${val.toFixed(3)}</div>
       </div>`;
   });
 }
@@ -410,12 +505,12 @@ async function fetchAndUpdate() {
     connected = true;
     document.getElementById('conn-banner').classList.remove('show');
     document.getElementById('status-dot').style.background = 'var(--accent-green)';
+    document.getElementById('status-label').textContent = 'Live';
 
     const b = state.buildings && state.buildings[currentBuilding];
     if (!b) return;
 
     const step = state.step;
-    const hourOfDay = b.hour_of_day || 0;
 
     // ── Header ──
     document.getElementById('ep-step').textContent = `ep:${state.episode} step:${step}/${EPISODE_STEPS - 1}`;
@@ -464,8 +559,12 @@ async function fetchAndUpdate() {
     }
 
     // ── Grid stress ──
-    document.getElementById('stress-big').textContent = b.grid_stress_signal.toFixed(3);
+    const stressBig = document.getElementById('stress-big');
+    stressBig.textContent = b.grid_stress_signal.toFixed(3);
+    stressBig.className = 'stress-value ' + 
+      (b.grid_stress_signal > 0.7 ? 'high' : b.grid_stress_signal > 0.4 ? 'mid' : 'low');
     updateStressMeter(b.grid_stress_signal);
+    
     const cardStress = document.getElementById('card-stress');
     if (b.grid_stress_signal > 0.7) {
       cardStress.classList.add('alert-active');
@@ -478,7 +577,7 @@ async function fetchAndUpdate() {
     document.getElementById('storage-pct').textContent = storagePct;
     document.getElementById('storage-fill').style.width = `${storagePct}%`;
 
-    // ── History-based charts (only update when step changes) ──
+    // ── History-based charts (only when step changes) ──
     if (step !== lastStep) {
       lastStep = step;
       const stepLabels = Array.from({ length: b.temp_history.length }, (_, i) => i);
@@ -495,8 +594,8 @@ async function fetchAndUpdate() {
       // Storage history
       if (b.hvac_history && b.hvac_history.length > 0) {
         storageChart.data.labels = stepLabels;
-        storageChart.data.datasets[0].data = Array.from({ length: b.hvac_history.length }, (_, i) =>
-          b.thermal_storage_level // simplify: use current level as placeholder
+        storageChart.data.datasets[0].data = Array.from({ length: b.hvac_history.length }, () =>
+          b.thermal_storage_level
         );
         storageChart.update('none');
       }
@@ -515,25 +614,22 @@ async function fetchAndUpdate() {
         const n = b.cost_history.length;
         costChart.data.labels = Array.from({ length: n }, (_, i) => i);
         costChart.data.datasets[0].data = b.cost_history;
-        // Generate approximate baseline curve (linear ramp to b.baseline_cost)
         const baselineStep = b.baseline_cost / Math.max(step, 1);
         costChart.data.datasets[1].data = b.cost_history.map((_, i) => baselineStep * (i + 1));
         costChart.update('none');
       }
 
-      // Grid stress history
+      // Grid stress + reward history
       if (b.reward_history && b.reward_history.length > 0) {
         const n = b.reward_history.length;
         stressChart.data.labels = Array.from({ length: n }, (_, i) => i);
         stressChart.data.datasets[0].data = b.reward_history.map(r => Math.max(0, r.grid_response || 0));
         stressChart.update('none');
 
-        // Total reward timeline chart (full episode)
         rewardChart.data.labels = Array.from({ length: n }, (_, i) => i);
         rewardChart.data.datasets[0].data = b.reward_history.map(r => r.total || 0);
         rewardChart.update('none');
 
-        // Reward rows (last step)
         renderRewardRows(b.reward_history[b.reward_history.length - 1]);
       }
 
@@ -545,7 +641,7 @@ async function fetchAndUpdate() {
     connected = false;
     document.getElementById('conn-banner').classList.add('show');
     document.getElementById('status-dot').style.background = 'var(--accent-red)';
-    // console.error('Poll error:', err);
+    document.getElementById('status-label').textContent = 'Offline';
   }
 }
 
@@ -554,8 +650,9 @@ async function fetchAndUpdate() {
 async function doReset() {
   const taskId = parseInt(document.getElementById('task-select').value, 10);
   const btn = document.getElementById('btn-reset');
-  btn.textContent = 'Resetting...';
+  btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spin"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg> Resetting...';
   btn.disabled = true;
+  btn.style.opacity = '0.6';
   lastStep = -1;
   try {
     await fetch(`${API_BASE}/reset`, {
@@ -566,48 +663,125 @@ async function doReset() {
   } catch (e) {
     console.error(e);
   }
-  btn.textContent = '↺ New Episode';
+  btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg> New Episode';
   btn.disabled = false;
+  btn.style.opacity = '1';
   document.getElementById('grade-result').textContent = '';
+  document.getElementById('grade-result').classList.remove('show');
 }
 
 let liveSimTimer = null;
 let isLiveSimulating = false;
+let lastLiveState = null;
+
+// ── Smart Heuristic Agent ───────────────────────────────────────────────────
+// Mirrors the Python _heuristic_action() from inference.py.
+// Reads the latest fetched state and generates intelligent actions that
+// exercise ALL reward components: cost, temperature, grid DR, efficiency,
+// stability, deadlines, and carbon.
+function heuristicAction(b) {
+  if (!b) {
+    return { hvac_power_level: 0.5, thermal_charge_rate: 0.0, batch_job_slot: 0, load_shed_fraction: 0.0, building_id: currentBuilding };
+  }
+
+  const price   = b.current_price   || 0.10;
+  const stress  = b.grid_stress_signal || 0.0;
+  const temp    = b.indoor_temperature || 21.0;
+  const storage = b.thermal_storage_level || 0.5;
+  const queue   = b.batch_queue || [];
+  const carbon  = b.carbon_intensity || 300;
+  const step    = b.step || 0;
+
+  // ── HVAC: price-aware + temperature-reactive ──
+  let hvac = 0.5;
+  if (price < 0.07)       hvac = 0.7;   // cheap → run more
+  else if (price > 0.15)  hvac = 0.3;   // expensive → reduce
+  else                    hvac = 0.5;
+
+  // Temperature override: keep within 19–23°C
+  if (temp > 23.0)      hvac = Math.max(hvac, 0.8);
+  else if (temp > 22.0) hvac = Math.max(hvac, 0.6);
+  else if (temp < 19.0) hvac = Math.min(hvac, 0.2);
+  else if (temp < 20.0) hvac = Math.min(hvac, 0.35);
+
+  // ── Thermal storage: arbitrage ──
+  let charge = 0.0;
+  if (price < 0.07 && storage < 0.8) {
+    charge = 0.6;          // charge during cheap periods
+  } else if (price > 0.15 && storage > 0.3) {
+    charge = -0.5;         // discharge during expensive periods
+  } else if (price < 0.10 && storage < 0.5) {
+    charge = 0.3;          // moderate charge at mid-low prices
+  } else if (price > 0.12 && storage > 0.6) {
+    charge = -0.3;         // moderate discharge at mid-high prices
+  }
+
+  // Carbon-aware: prefer charging when carbon is low
+  if (carbon < 250 && storage < 0.7) {
+    charge = Math.max(charge, 0.4);
+  }
+
+  // ── Load shedding: grid stress response ──
+  let shed = 0.0;
+  if (stress > 0.8)       shed = 0.45;
+  else if (stress > 0.7)  shed = 0.35;
+  else if (stress > 0.5)  shed = 0.15;
+  else if (stress > 0.3)  shed = 0.05;
+
+  // ── Batch scheduling: urgency-aware ──
+  let slot = 2;  // default: moderate defer
+  if (queue.length > 0) {
+    const minDeadline = Math.min(...queue);
+    const stepsLeft = minDeadline - step;
+    if (stepsLeft < 4)       slot = 0;  // urgent: run now
+    else if (stepsLeft < 8)  slot = 1;  // soon: start soon
+    else if (stepsLeft < 16) slot = 2;  // moderate
+    else if (price < 0.08)   slot = 0;  // cheap: might as well run now
+    else                     slot = 3;  // defer
+  }
+
+  return {
+    hvac_power_level: Math.max(0, Math.min(1, hvac)),
+    thermal_charge_rate: Math.max(-1, Math.min(1, charge)),
+    batch_job_slot: Math.max(0, Math.min(4, slot)),
+    load_shed_fraction: Math.max(0, Math.min(0.5, shed)),
+    building_id: currentBuilding,
+  };
+}
 
 function toggleLiveSim() {
   const btn = document.getElementById('btn-live');
   if (isLiveSimulating) {
-    // Stop live sim
     clearInterval(liveSimTimer);
     isLiveSimulating = false;
-    btn.textContent = '▶ Start Live Simulation';
-    btn.style.background = 'var(--accent-green)';
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Start Live Simulation';
+    btn.classList.remove('active');
   } else {
-    // Start live sim
     isLiveSimulating = true;
-    btn.textContent = '⏸ Pause Live Simulation';
-    btn.style.background = 'var(--accent-amber)';
-    
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg> Pause Simulation';
+    btn.classList.add('active');
+
     liveSimTimer = setInterval(async () => {
-      // Step the environment automatically with a simple heuristic policy
-      const taskId = parseInt(document.getElementById('task-select').value, 10);
       try {
+        // Fetch current state to make informed actions
+        const stateRes = await fetch(`${API_BASE}/state`);
+        if (stateRes.ok) {
+          const state = await stateRes.json();
+          lastLiveState = state.buildings && state.buildings[currentBuilding];
+        }
+
+        // Use smart heuristic agent based on current state
+        const action = heuristicAction(lastLiveState);
+
         await fetch(`${API_BASE}/step`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            hvac_power_level: 0.5,
-            thermal_charge_rate: 0.0,
-            batch_job_slot: 0,
-            load_shed_fraction: 0.0,
-            building_id: currentBuilding
-          }),
+          body: JSON.stringify(action),
         });
-        // fetchAndUpdate() will catch the change via polling
       } catch (e) {
         console.error(e);
       }
-    }, 400); // 400ms per step
+    }, 400);
   }
 }
 
@@ -619,14 +793,16 @@ async function doGrade() {
     const el = document.getElementById('grade-result');
     el.textContent = `Score: ${score}% ${grade.exploit_detected ? '⚠ exploit!' : ''}`;
     el.style.color = grade.score > 0.6 ? 'var(--accent-green)' : grade.score > 0.3 ? 'var(--accent-amber)' : 'var(--accent-red)';
+    el.style.background = grade.score > 0.6 ? 'rgba(74,222,128,0.08)' : grade.score > 0.3 ? 'rgba(245,166,35,0.08)' : 'rgba(240,110,110,0.08)';
+    el.classList.add('show');
   } catch (e) {
     console.error(e);
   }
 }
 
 function onTaskChange() {
-  // Reset chart histories on task change
   [tempChart, storageChart, hvacChart, costChart, stressChart, rewardChart].forEach(c => {
+    if (!c) return;
     c.data.labels = [];
     c.data.datasets.forEach(d => d.data = []);
     c.update('none');
@@ -641,7 +817,7 @@ function onBuildingChange() {
 // ── Start polling ────────────────────────────────────────────────────────────
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  fetchAndUpdate(); // immediate first fetch
+  fetchAndUpdate();
   pollTimer = setInterval(fetchAndUpdate, POLL_MS);
 }
 

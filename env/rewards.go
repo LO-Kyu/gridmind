@@ -31,32 +31,46 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	rc := RewardComponents{}
 
 	// ── 1. Cost Savings ─────────────────────────────────────────────────────
-	// Shift from pure penalty to a positive baseline: standardizing operations gives positive reward.
-	// Baseline reward of 1.5, minus the relative cost.
+	// Positive baseline minus relative cost: smart agents save money.
 	typicalCost := 4.0
-	rc.CostSavings = 1.5 - (inp.StepCost / typicalCost) * 2.0
+	rc.CostSavings = 1.5 - (inp.StepCost/typicalCost)*2.0
 
 	// ── 2. Temperature Constraint ────────────────────────────────────────────
-	// Only active for task 2 and 3.
+	// Active for task 2 and 3. Gaussian bonus for being near setpoint.
 	if inp.TaskID >= 2 {
 		temp := inp.B.IndoorTemperature
 		rc.TempConstraint = computeTempReward(temp, inp.B.SetpointTemperature, inp.TMin, inp.TMax)
 	}
 
 	// ── 3. Grid Stress Response ──────────────────────────────────────────────
-	// Only active for task 3.
+	// Active for task 3. Rewards proactive grid awareness, not just reactive shedding.
 	if inp.TaskID >= 3 {
 		rc.GridResponse = computeGridResponse(inp.GridStress, inp.ShedFraction)
 	}
 
-	// ── 4. Deadline Penalty ──────────────────────────────────────────────────
-	// Task 1 is cost-only; batch jobs are not part of the objective.
-	if inp.BatchMissed > 0 && inp.TaskID >= 2 {
-		rc.DeadlinePenalty = -float64(inp.BatchMissed) * 1.5
+	// ── 4. Deadline Penalty / Bonus ──────────────────────────────────────────
+	// Task 2+: penalise missed jobs, reward on-track pending jobs.
+	if inp.TaskID >= 2 {
+		if inp.BatchMissed > 0 {
+			rc.DeadlinePenalty = -float64(inp.BatchMissed) * 1.5
+		}
+		// Positive signal: reward for jobs still on track (not missed yet)
+		onTrackJobs := 0
+		for _, job := range inp.B.Jobs {
+			if !job.Completed && !job.MissedDeadline {
+				onTrackJobs++
+			}
+			if job.Completed && !job.MissedDeadline {
+				onTrackJobs++ // completed on time is even better
+			}
+		}
+		if onTrackJobs > 0 && inp.BatchMissed == 0 {
+			rc.DeadlinePenalty += float64(onTrackJobs) * 0.08
+		}
 	}
 
-	// ── 5. Efficiency Bonus (thermal storage arbitrage) ───────────────────────
-	// Reward for charging storage during cheap periods and discharging during expensive ones.
+	// ── 5. Efficiency Bonus (thermal storage utilization) ─────────────────────
+	// Rewards smart storage use: arbitrage + maintaining useful storage levels.
 	if len(inp.PriceCurve) > inp.CurrentStep {
 		rc.EfficiencyBonus = computeArbitrageBonus(
 			inp.ChargeRate,
@@ -65,23 +79,36 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 			inp.CurrentStep,
 		)
 	}
+	// Baseline: reward maintaining a balanced storage level (not empty, not always full)
+	storageLevel := inp.B.ThermalStorageLevel
+	if storageLevel > 0.2 && storageLevel < 0.85 {
+		rc.EfficiencyBonus += 0.15 // good operating range
+	} else if storageLevel <= 0.05 || storageLevel >= 0.98 {
+		rc.EfficiencyBonus -= 0.1 // extremes are wasteful
+	}
 
-	// ── 6. Stability Penalty ─────────────────────────────────────────────────
-	// Penalise rapid oscillation in HVAC setpoint and thermal charge rate.
+	// ── 6. Stability Reward/Penalty ──────────────────────────────────────────
+	// Smooth operation earns a bonus; rapid oscillation earns a penalty.
 	hvacDelta := math.Abs(inp.Act.HVACPowerLevel - inp.PrevHVACLevel)
 	chargeDelta := math.Abs(inp.ChargeRate - inp.PrevChargeRate)
 	oscillation := hvacDelta*0.5 + chargeDelta*0.3
 	if oscillation > 0.3 {
 		rc.StabilityPenalty = -(oscillation - 0.3) * 0.8
+	} else {
+		// Positive reward for smooth, stable control
+		rc.StabilityPenalty = (0.3 - oscillation) * 0.4
 	}
 
 	// ── 7. Carbon Reward ─────────────────────────────────────────────────────
-	// Low-carbon bonus: active for task 3.
+	// Active for task 3. Rewards low-carbon operation.
 	if inp.TaskID >= 3 {
-		// Normalise carbon: iso-ne range roughly 100–700 gCO2/kWh
-		carbonNorm := (inp.B.CarbonIntensity - 100.0) / 600.0
-		// Provide a baseline positive score, reduced by carbon footprint
-		rc.CarbonReward = 0.5 - (inp.EnergyKWh * carbonNorm * 0.3)
+		carbonNorm := math.Max(0, (inp.B.CarbonIntensity-100.0)/600.0)
+		// Baseline bonus, reduced by carbon-heavy consumption
+		rc.CarbonReward = 0.6 - (inp.EnergyKWh * carbonNorm * 0.25)
+		// Extra bonus for operating during genuinely clean grid periods
+		if carbonNorm < 0.3 {
+			rc.CarbonReward += 0.15
+		}
 	}
 
 	// ── Aggregate ────────────────────────────────────────────────────────────
@@ -105,15 +132,29 @@ func computeTempReward(temp, setpoint, tMin, tMax float64) float64 {
 	return -excess * 0.6
 }
 
-// computeGridResponse returns a bonus for shedding load during high grid stress,
-// and a mild penalty for shedding when the grid is fine.
+// computeGridResponse returns a reward for grid-aware behavior:
+// bonus for shedding during stress, baseline for readiness, penalty for waste.
 func computeGridResponse(stress, shedFraction float64) float64 {
 	if stress > 0.7 {
-		// Bonus proportional to shed fraction
-		return shedFraction * stress * 1.5
+		// High stress: large bonus proportional to shed fraction
+		if shedFraction > 0.1 {
+			return shedFraction * stress * 1.5
+		}
+		// High stress but not shedding: penalty
+		return -0.2 * stress
 	}
-	// Mild penalty for unnecessary shedding (reduces productivity without benefit)
-	return -shedFraction * (0.7 - stress) * 0.3
+	if stress > 0.3 {
+		// Moderate stress: small bonus for readiness, small bonus for proactive shedding
+		if shedFraction > 0.05 {
+			return shedFraction * 0.5 // proactive shedding during moderate stress
+		}
+		return 0.08 // grid-aware readiness bonus
+	}
+	// Low stress: mild penalty for unnecessary shedding, baseline for normal operation
+	if shedFraction > 0.1 {
+		return -shedFraction * 0.3
+	}
+	return 0.1 // small positive signal for operating normally under low stress
 }
 
 // computeArbitrageBonus rewards storage use when current price is low vs recent history

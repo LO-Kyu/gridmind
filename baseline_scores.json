@@ -16,9 +16,9 @@
     {
       "task_id": 1,
       "seed": 1100,
-      "total_reward": -54.91106240679752,
+      "total_reward": 114.28893759320243,
       "total_steps": 96,
-      "elapsed_sec": 0.8684265613555908,
+      "elapsed_sec": 1.3370721340179443,
       "score": 0.2776,
       "sub_scores": {
         "cost": 0.277555958007489
@@ -28,9 +28,9 @@
     {
       "task_id": 2,
       "seed": 1200,
-      "total_reward": -573.2793620498348,
+      "total_reward": -625.6665397814021,
       "total_steps": 96,
-      "elapsed_sec": 0.9907081127166748,
+      "elapsed_sec": 1.229602336883545,
       "score": 0.2182,
       "sub_scores": {
         "cost": 0.2595566056450961,
@@ -41,9 +41,9 @@
     {
       "task_id": 3,
       "seed": 1300,
-      "total_reward": -670.8653705366278,
+      "total_reward": -639.8462871515986,
       "total_steps": 96,
-      "elapsed_sec": 0.8988945484161377,
+      "elapsed_sec": 1.1910581588745117,
       "score": 0.3115,
       "sub_scores": {
         "batch_deadline": 1,

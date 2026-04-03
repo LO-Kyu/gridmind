@@ -113,6 +113,24 @@ Episode **grade** is returned by `GET /grade` after the episode completes (or af
 
 ---
 
+## Reward Structure
+
+The environment uses a **dense, multi-component reward** signal. Each step returns a scalar `reward` (the sum) and a detailed `reward_components` breakdown in `info`:
+
+| Component | Key | Active | Description |
+|-----------|-----|--------|-------------|
+| **Cost Savings** | `cost_savings` | All tasks | Positive baseline (1.5) minus relative step cost. Smart agents that reduce energy use earn higher rewards. |
+| **Temperature Constraint** | `temp_constraint` | Task 2, 3 | Gaussian bonus for staying near setpoint (21°C). Max +1.5 at setpoint, degrades toward bounds, penalty outside [19°C, 23°C]. |
+| **Grid Demand Response** | `grid_response` | Task 3 | Bonus for shedding load during high grid stress (>0.7), readiness bonus during moderate stress, penalty for unnecessary shedding. |
+| **Efficiency Bonus** | `efficiency_bonus` | All tasks | Rewards thermal storage arbitrage (charge during cheap prices, discharge during expensive) and maintaining useful storage levels. |
+| **Stability Reward** | `stability_penalty` | All tasks | Positive reward for smooth, stable control; penalty for rapid HVAC/storage oscillation. |
+| **Deadline Penalty** | `deadline_penalty` | Task 2, 3 | Penalty per missed batch job deadline (-1.5 each). Positive bonus for keeping jobs on track. |
+| **Carbon Reward** | `carbon_reward` | Task 3 | Baseline bonus for low-carbon operation, reduced by carbon-heavy consumption. Extra bonus during clean grid periods. |
+
+**Grading weights (Task 3):** cost 28%, temperature 20%, grid_response 20%, batch_deadline 12%, carbon 20%.
+
+---
+
 ## HTTP API
 
 Base URL: `http://<host>:7860` (default in container: port **7860**).
@@ -228,6 +246,75 @@ The image runs **supervisord** as a non-root user with two programs: Go server (
 | **`--max-steps`** | Produces a **partial** episode; final `GET /grade` reflects that partial trajectory. |
 | **Manual run (no Docker)** | Install Go 1.21+, `go run .` from repo root (default port 7860); install Python deps and run `python inference.py` as above. |
 | **Runtime** | The baseline completes within typical hackathon limits (<20 minutes). |
+
+---
+
+## Example API Calls
+
+With the container running (`docker run -p 7860:7860 gridmind-rl`):
+
+```bash
+# Health check
+curl http://localhost:7860/health
+# → {"status":"ok","version":"1.0.0"}
+
+# Reset to Task 3 (hard) with seed 42
+curl -X POST http://localhost:7860/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task_id": 3, "seed": 42, "num_buildings": 1}'
+# → {"observations":[{"indoor_temperature":21.3,...}],"episode":1,"task_id":3,"seed":42}
+
+# Take one step
+curl -X POST http://localhost:7860/step \
+  -H "Content-Type: application/json" \
+  -d '{"hvac_power_level": 0.6, "thermal_charge_rate": 0.3, "batch_job_slot": 1, "load_shed_fraction": 0.1}'
+# → {"observation":{...},"reward":2.15,"done":false,"info":{"reward_components":{...},...}}
+
+# Get current state
+curl http://localhost:7860/state
+# → {"buildings":[...],"price_curve_episode":[...],"step":1,"task_id":3,...}
+
+# Grade after episode ends (run 96 steps first)
+curl http://localhost:7860/grade
+# → {"task_id":3,"score":0.3115,"sub_scores":{"cost":0.25,"temperature":0.14,...},...}
+
+# List all tasks
+curl http://localhost:7860/tasks
+# → [{"id":1,"name":"Cost Minimization","difficulty":"easy",...},...]
+```
+
+---
+
+## Hugging Face Space Deployment
+
+### 1. Create a new HF Space
+
+Go to [huggingface.co/new-space](https://huggingface.co/new-space) and create a **Docker** space. Select:
+- **SDK:** Docker
+- **Hardware:** CPU Basic (2 vCPU, 16GB)
+
+### 2. Push code to HF
+
+```bash
+# Clone and push
+git remote add hf https://huggingface.co/spaces/YOUR_USERNAME/gridmind-rl
+git push hf main
+```
+
+### 3. Verify deployment
+
+Once the Space builds, verify at your Space URL:
+
+```bash
+curl https://YOUR_USERNAME-gridmind-rl.hf.space/health
+# → {"status":"ok","version":"1.0.0"}
+
+curl -X POST https://YOUR_USERNAME-gridmind-rl.hf.space/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task_id":1,"seed":42}'
+```
+
+> **Note:** HF Spaces only exposes **one port** publicly. Port **7860** (the OpenEnv API) is the primary port and will be the public endpoint. The dashboard on port 7861 is for local development only.
 
 ---
 
