@@ -5,7 +5,6 @@ Runs an LLM agent against all 3 tasks for N episodes each.
 Uses OpenAI-compatible API via API_BASE_URL / MODEL_NAME / HF_TOKEN environment variables.
 
 Usage:
-    export API_BASE_URL=https://router.huggingface.co/v1
     export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
     export HF_TOKEN=hf_xxxx
     python inference.py
@@ -27,8 +26,8 @@ from openai import OpenAI
 # ── Constants ──────────────────────────────────────────────────────────────
 
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 DEFAULT_EPISODES = 1
 DEFAULT_SEED_BASE = 1000
@@ -128,9 +127,12 @@ class LLMAgent:
             api_key=HF_TOKEN if HF_TOKEN else "none",
         )
         self.model = MODEL_NAME
+        self.fallback_mode = False
 
     def choose_action(self, obs: dict, task_id: int) -> dict:
         """Prompt the LLM with current observation, return parsed action dict."""
+        if self.fallback_mode:
+            return self._heuristic_action(obs)
         task_desc = TASK_DESCRIPTIONS.get(task_id, TASK_DESCRIPTIONS[1])
 
         prompt = f"""{task_desc}
@@ -174,7 +176,12 @@ Respond with ONLY a JSON action:
                 action = json.loads(content)
                 return self._clamp_action(action)
             except Exception as e:
-                print(f"  [LLM attempt {attempt+1}/{MAX_RETRIES}] error: {e}")
+                err_str = str(e)
+                print(f"  [LLM attempt {attempt+1}/{MAX_RETRIES}] error: {err_str}")
+                if "402" in err_str or "depleted" in err_str:
+                    print("  [WARN] Hugging Face free credits depleted! Switching to local heuristic agent for the rest of the simulation.")
+                    self.fallback_mode = True
+                    return self._heuristic_action(obs)
                 time.sleep(1)
 
         return self._heuristic_action(obs)
@@ -302,7 +309,6 @@ def run_episode(
 
     elapsed = time.time() - start_time
     grade = env_client.grade()
-
     print("[END]", flush=True)
 
     return {

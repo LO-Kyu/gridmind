@@ -42,8 +42,8 @@ docker build -t gridmind-rl .
 docker run --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl
 ```
 
-- **7860** — Environment API (OpenEnv / agent traffic)  
-- **7861** — Web dashboard (optional)
+- **7860** — Environment API (OpenEnv / agent traffic); http://localhost:7860  
+- **7861** — Web dashboard (optional); http://localhost:7861  
 
 **Windows (PowerShell)** — same commands in a terminal with Docker Desktop running.
 
