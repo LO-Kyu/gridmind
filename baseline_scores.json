@@ -7,50 +7,50 @@
   "llm_every": 4,
   "max_steps": null,
   "task_averages": {
-    "1": 0.2776,
-    "2": 0.2182,
-    "3": 0.3115
+    "1": 0.7063,
+    "2": 0.6333,
+    "3": 0.5966
   },
-  "overall_average": 0.2691,
+  "overall_average": 0.6454,
   "all_results": [
     {
       "task_id": 1,
       "seed": 1100,
-      "total_reward": 114.28893759320243,
+      "total_reward": 251.40178983938813,
       "total_steps": 96,
-      "elapsed_sec": 1.3370721340179443,
-      "score": 0.2776,
+      "elapsed_sec": 0.14183712005615234,
+      "score": 0.7063,
       "sub_scores": {
-        "cost": 0.277555958007489
+        "cost": 0.7063441549865395
       },
       "exploit_detected": false
     },
     {
       "task_id": 2,
       "seed": 1200,
-      "total_reward": -625.6665397814021,
+      "total_reward": 246.40262234598185,
       "total_steps": 96,
-      "elapsed_sec": 1.229602336883545,
-      "score": 0.2182,
+      "elapsed_sec": 0.11959218978881836,
+      "score": 0.6333,
       "sub_scores": {
-        "cost": 0.2595566056450961,
-        "temperature": 0.15625
+        "cost": 0.7014155357169216,
+        "temperature": 0.53125
       },
       "exploit_detected": false
     },
     {
       "task_id": 3,
       "seed": 1300,
-      "total_reward": -639.8462871515986,
+      "total_reward": 255.60231973463087,
       "total_steps": 96,
-      "elapsed_sec": 1.1910581588745117,
-      "score": 0.3115,
+      "elapsed_sec": 0.12531447410583496,
+      "score": 0.5966,
       "sub_scores": {
         "batch_deadline": 1,
-        "carbon": 0.24377839161166936,
-        "cost": 0.25263438913936676,
+        "carbon": 0.6574530318382599,
+        "cost": 0.670084941969173,
         "grid_response": 0.21428571428571427,
-        "temperature": 0.14583333333333334
+        "temperature": 0.5729166666666666
       },
       "exploit_detected": false
     }

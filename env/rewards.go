@@ -25,8 +25,8 @@ type ComputeRewardInput struct {
 }
 
 // ComputeReward returns a dense RewardComponents struct from the current step inputs.
-// The reward is task-aware: task 1 only cares about cost, task 2 adds temperature,
-// task 3 adds grid response, batch deadlines, and carbon.
+// All 7 reward components are always computed for rich per-step signal.
+// Task-specific weighting is handled by the GRADING system (tasks.go), not here.
 func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	rc := RewardComponents{}
 
@@ -36,37 +36,31 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	rc.CostSavings = 1.5 - (inp.StepCost/typicalCost)*2.0
 
 	// ── 2. Temperature Constraint ────────────────────────────────────────────
-	// Active for task 2 and 3. Gaussian bonus for being near setpoint.
-	if inp.TaskID >= 2 {
-		temp := inp.B.IndoorTemperature
-		rc.TempConstraint = computeTempReward(temp, inp.B.SetpointTemperature, inp.TMin, inp.TMax)
-	}
+	// Gaussian bonus for being near setpoint; penalty outside comfort bounds.
+	temp := inp.B.IndoorTemperature
+	rc.TempConstraint = computeTempReward(temp, inp.B.SetpointTemperature, inp.TMin, inp.TMax)
 
 	// ── 3. Grid Stress Response ──────────────────────────────────────────────
-	// Active for task 3. Rewards proactive grid awareness, not just reactive shedding.
-	if inp.TaskID >= 3 {
-		rc.GridResponse = computeGridResponse(inp.GridStress, inp.ShedFraction)
-	}
+	// Rewards proactive grid awareness and demand-response compliance.
+	rc.GridResponse = computeGridResponse(inp.GridStress, inp.ShedFraction)
 
 	// ── 4. Deadline Penalty / Bonus ──────────────────────────────────────────
-	// Task 2+: penalise missed jobs, reward on-track pending jobs.
-	if inp.TaskID >= 2 {
-		if inp.BatchMissed > 0 {
-			rc.DeadlinePenalty = -float64(inp.BatchMissed) * 1.5
+	// Penalise missed batch jobs, reward on-track pending jobs.
+	if inp.BatchMissed > 0 {
+		rc.DeadlinePenalty = -float64(inp.BatchMissed) * 1.5
+	}
+	// Positive signal: reward for jobs still on track (not missed yet)
+	onTrackJobs := 0
+	for _, job := range inp.B.Jobs {
+		if !job.Completed && !job.MissedDeadline {
+			onTrackJobs++
 		}
-		// Positive signal: reward for jobs still on track (not missed yet)
-		onTrackJobs := 0
-		for _, job := range inp.B.Jobs {
-			if !job.Completed && !job.MissedDeadline {
-				onTrackJobs++
-			}
-			if job.Completed && !job.MissedDeadline {
-				onTrackJobs++ // completed on time is even better
-			}
+		if job.Completed && !job.MissedDeadline {
+			onTrackJobs++ // completed on time is even better
 		}
-		if onTrackJobs > 0 && inp.BatchMissed == 0 {
-			rc.DeadlinePenalty += float64(onTrackJobs) * 0.08
-		}
+	}
+	if onTrackJobs > 0 && inp.BatchMissed == 0 {
+		rc.DeadlinePenalty += float64(onTrackJobs) * 0.08
 	}
 
 	// ── 5. Efficiency Bonus (thermal storage utilization) ─────────────────────
@@ -100,15 +94,13 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	}
 
 	// ── 7. Carbon Reward ─────────────────────────────────────────────────────
-	// Active for task 3. Rewards low-carbon operation.
-	if inp.TaskID >= 3 {
-		carbonNorm := math.Max(0, (inp.B.CarbonIntensity-100.0)/600.0)
-		// Baseline bonus, reduced by carbon-heavy consumption
-		rc.CarbonReward = 0.6 - (inp.EnergyKWh * carbonNorm * 0.25)
-		// Extra bonus for operating during genuinely clean grid periods
-		if carbonNorm < 0.3 {
-			rc.CarbonReward += 0.15
-		}
+	// Rewards low-carbon operation based on grid carbon intensity.
+	carbonNorm := math.Max(0, (inp.B.CarbonIntensity-100.0)/600.0)
+	// Baseline bonus, reduced by carbon-heavy consumption
+	rc.CarbonReward = 0.6 - (inp.EnergyKWh * carbonNorm * 0.25)
+	// Extra bonus for operating during genuinely clean grid periods
+	if carbonNorm < 0.3 {
+		rc.CarbonReward += 0.15
 	}
 
 	// ── Aggregate ────────────────────────────────────────────────────────────

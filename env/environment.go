@@ -418,17 +418,29 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 	batchCompleted, batchMissed := e.updateBatchJobs(b, act.BatchJobSlot, s)
 
 	// ----- Thermal dynamics -----
-	// Simple first-order thermal model:
-	// ΔT per step = (HVAC effect + outdoor infiltration + storage discharge effect - process demand)
-	hvacEffect := (act.HVACPowerLevel - 0.5) * 2.0 * 1.5 // ±3°C max swing per step
+	// First-order setpoint-driven model:
+	// HVAC drives temperature toward setpoint; higher power = stronger effect.
+	// At HVACPowerLevel=1.0, HVAC strongly pushes toward setpoint.
+	// At HVACPowerLevel=0.0, HVAC is off — temp drifts with environment.
+	hvacEffect := (b.SetpointTemperature - b.IndoorTemperature) * act.HVACPowerLevel * 0.15
+
+	// Outdoor infiltration: building slowly equilibrates with outside
 	infiltration := (b.OutdoorTemperature - b.IndoorTemperature) * 0.03
+
+	// Thermal storage discharge provides supplemental conditioning toward setpoint
 	storageEffect := 0.0
-	if act.ThermalChargeRate < 0 { // discharging storage = provides cooling/heating
-		storageEffect = math.Abs(act.ThermalChargeRate) * 0.5
+	if act.ThermalChargeRate < 0 {
+		storageEffect = (b.SetpointTemperature - b.IndoorTemperature) * math.Abs(act.ThermalChargeRate) * 0.05
 	}
+
+	// Process equipment waste heat (always warms the building)
 	processHeat := b.ProcessDemand * 0.002 // kW→°C rough factor
-	deltaT := hvacEffect + infiltration + storageEffect - processHeat
+
+	deltaT := hvacEffect + infiltration + storageEffect + processHeat
 	b.IndoorTemperature += deltaT
+
+	// Clamp to physically reasonable indoor range
+	b.IndoorTemperature = math.Max(10.0, math.Min(40.0, b.IndoorTemperature))
 
 	// ----- Energy & cost accounting -----
 	batchPowerDraw := e.batchRunningPower(b)
