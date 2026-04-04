@@ -87,15 +87,17 @@ python inference.py --fast-mode --episodes 1
 
 You can run the same entrypoint directly with `python python/inference.py` (e.g. `python python/inference.py --fast-mode`); flags match the root `inference.py` wrapper.
 
-**LLM baseline** (requires Hugging Face or other OpenAI-compatible API credentials):
+**LLM baseline** (requires any OpenAI-compatible API credentials — HuggingFace, Groq, etc.):
 
 ```bash
 export ENV_URL=http://localhost:7860
 export API_BASE_URL=https://router.huggingface.co/v1
 export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
-export HF_TOKEN=your_token_here
+export OPENAI_API_KEY=your_token_here   # or HF_TOKEN=your_token_here
 python inference.py --episodes 1 --llm-every 4
 ```
+
+> **Note:** The script accepts either `OPENAI_API_KEY` (hackathon standard) or `HF_TOKEN` (HuggingFace convention). You do **not** need a paid OpenAI key — any OpenAI-compatible provider works.
 
 Results are written to `baseline_scores.json` by default (`--output` to change).
 
@@ -160,7 +162,7 @@ There is **no** `--judge-mode` flag in this repository. Use the modes below.
 | Mode | Command pattern | Behavior |
 |------|-----------------|----------|
 | **Fast (heuristic)** | `python inference.py --fast-mode` | No LLM calls; deterministic given env seed; fastest for CI or smoke tests. |
-| **Default LLM** | `python inference.py` | Uses OpenAI-compatible API (`API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`); default `--llm-every 4` reuses each LLM action for 4 steps to limit API cost. |
+| **Default LLM** | `python inference.py` | Uses OpenAI Python client (`API_BASE_URL`, `MODEL_NAME`, `OPENAI_API_KEY` or `HF_TOKEN`); default `--llm-every 4` reuses each LLM action for 4 steps to limit API cost. |
 | **Recommended for automated evaluation / judging** | `python inference.py --fast-mode --episodes 1` | Recommended when automated pipelines need **reproducibility** and **no external API** dependency. |
 
 Other useful flags:

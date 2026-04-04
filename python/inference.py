@@ -2,13 +2,19 @@
 GridMind-RL Baseline Inference Script
 --------------------------------------
 Runs an LLM agent against all 3 tasks for N episodes each.
-Uses OpenAI-compatible API via API_BASE_URL / MODEL_NAME / HF_TOKEN environment variables.
+Uses the OpenAI Python client pointed at any OpenAI-compatible endpoint.
+
+Required environment variables:
+    API_BASE_URL  — The API endpoint for the LLM (default: HuggingFace router)
+    MODEL_NAME    — The model identifier to use for inference
+    OPENAI_API_KEY or HF_TOKEN — API key for authentication (any provider)
 
 Usage:
+    export API_BASE_URL=https://router.huggingface.co/v1
     export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
-    export HF_TOKEN=hf_xxxx
+    export OPENAI_API_KEY=hf_xxxx   # or HF_TOKEN=hf_xxxx
     python inference.py
-    # or: python python/inference.py [--episodes 1] [--llm-every 4] [--fast-mode]
+    # or: python inference.py --fast-mode --episodes 1
 """
 
 from __future__ import annotations
@@ -28,7 +34,8 @@ from openai import OpenAI
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-HF_TOKEN = os.getenv("HF_TOKEN", "")
+# Accept OPENAI_API_KEY (hackathon standard) or HF_TOKEN (HuggingFace convention)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "") or os.getenv("HF_TOKEN", "")
 DEFAULT_EPISODES = 1
 DEFAULT_SEED_BASE = 1000
 MAX_RETRIES = 3
@@ -124,7 +131,7 @@ class LLMAgent:
     def __init__(self):
         self.client = OpenAI(
             base_url=API_BASE_URL,
-            api_key=HF_TOKEN if HF_TOKEN else "none",
+            api_key=OPENAI_API_KEY if OPENAI_API_KEY else "none",
         )
         self.model = MODEL_NAME
         self.fallback_mode = False

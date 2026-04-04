@@ -111,14 +111,25 @@ tasks:
     name: "Cost Minimization"
     description: "Minimize total energy cost over a 24-hour episode with no process constraints."
     difficulty: "easy"
+    weights:
+      cost: 1.0
   - id: 2
     name: "Constrained Temperature Management"
     description: "Minimize cost while keeping indoor temperature within ±2°C of setpoint at all times."
     difficulty: "medium"
+    weights:
+      cost: 0.6
+      temperature: 0.4
   - id: 3
     name: "Full Demand-Response with Batch Scheduling"
     description: "Minimize cost, maintain temperature, respond to grid stress events, schedule all batch jobs, and minimize carbon."
     difficulty: "hard"
+    weights:
+      cost: 0.28
+      temperature: 0.20
+      grid_response: 0.20
+      batch_deadline: 0.12
+      carbon: 0.20
 
 endpoints:
   health:
@@ -145,3 +156,7 @@ endpoints:
   tasks:
     path: /tasks
     method: GET
+  metrics:
+    path: /metrics
+    method: GET
+
