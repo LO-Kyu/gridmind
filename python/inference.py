@@ -47,8 +47,9 @@ except ImportError:
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/llama-3.3-70b-instruct:free")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1")
-# Accept OPENAI_API_KEY (hackathon standard) or HF_TOKEN (HuggingFace convention)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "") or os.getenv("HF_TOKEN", "")
+# Hackathon spec: HF_TOKEN is mandatory. Accept OPENAI_API_KEY as secondary fallback for dev.
+HF_TOKEN = os.getenv("HF_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "") or HF_TOKEN or ""
 DEFAULT_EPISODES = 1
 DEFAULT_SEED_BASE = 1000
 MAX_RETRIES = 3
@@ -277,60 +278,103 @@ def run_episode(
     max_steps: int | None,
     verbose: bool = False,
 ) -> dict[str, Any]:
-    """Run a single episode and return grade + metadata. Prints [START], [STEPn], [END]."""
+    """Run a single episode and emit hackathon-compliant stdout format.
+    
+    Emits:
+      [START] task=<name> env=gridmind model=<model>
+      [STEP] step=<n> action=<json> reward=<0.00> done=<true|false> error=<msg|null>
+      ...
+      [END] success=<true|false> steps=<n> rewards=<r1,r2,...>
+    """
     reset_resp = env_client.reset(task_id=task_id, seed=seed)
     obs = reset_resp["observations"][0]
-
-    print("[START]", flush=True)
-
+    
+    task_name = f"gridmind-task-{task_id}"
+    
+    # Emit [START] with required fields
+    print(f"[START] task={task_name} env=gridmind model={MODEL_NAME}", flush=True)
+    
     total_reward = 0.0
     total_steps = 0
     start_time = time.time()
     step_resp: dict[str, Any] = {}
     step_limit = EPISODE_STEPS if max_steps is None else min(max_steps, EPISODE_STEPS)
-
+    
     llm_reuse_remaining = 0
     cached_action = agent._default_action()
-
+    
+    step_rewards: list[float] = []
+    last_error: str | None = None
+    
     while not step_resp.get("done", False):
         if total_steps >= step_limit:
             break
-
-        if fast_mode:
-            action = agent._heuristic_action(obs)
-        else:
-            if llm_reuse_remaining <= 0:
-                cached_action = agent.choose_action(obs, task_id)
-                llm_reuse_remaining = max(1, llm_every)
-            action = cached_action
-
-        step_resp = env_client.step(action)
-        if step_resp is None or "observation" not in step_resp:
-            print(f"  [WARN] step {total_steps}: invalid step response", flush=True)
-            break
-
-        if not fast_mode:
-            llm_reuse_remaining -= 1
-
-        obs = step_resp["observation"]
-        total_reward += float(step_resp["reward"])
-        total_steps += 1
-        print(f"[STEP{total_steps}]", flush=True)
-
-        if verbose and total_steps % 16 == 0:
+        
+        try:
+            if fast_mode:
+                action = agent._heuristic_action(obs)
+            else:
+                if llm_reuse_remaining <= 0:
+                    cached_action = agent.choose_action(obs, task_id)
+                    llm_reuse_remaining = max(1, llm_every)
+                action = cached_action
+            
+            step_resp = env_client.step(action)
+            if step_resp is None or "observation" not in step_resp:
+                last_error = "invalid step response"
+                break
+            
+            if not fast_mode:
+                llm_reuse_remaining -= 1
+            
+            obs = step_resp["observation"]
+            reward = float(step_resp["reward"])
+            total_reward += reward
+            step_rewards.append(reward)
+            total_steps += 1
+            done = bool(step_resp.get("done", False))
+            
+            # Emit [STEP] with required fields (action as compact JSON, reward to 2 decimals)
+            action_json = json.dumps(action, separators=(',', ':'))
+            error_field = "null" if last_error is None else f'"{last_error}"'
             print(
-                f"    step={total_steps:02d} price=${obs['current_price']:.3f} "
-                f"temp={obs['indoor_temperature']:.1f}°C "
-                f"stress={obs['grid_stress_signal']:.2f} "
-                f"cost=${obs['cumulative_cost']:.2f} "
-                f"reward={step_resp['reward']:.3f}",
-                flush=True,
+                f"[STEP] step={total_steps} action={action_json} "
+                f"reward={reward:.2f} done={'true' if done else 'false'} error={error_field}",
+                flush=True
             )
-
+            
+            last_error = None  # Clear error after successful step
+            
+            if verbose and total_steps % 16 == 0:
+                print(
+                    f"    step={total_steps:02d} price=${obs['current_price']:.3f} "
+                    f"temp={obs['indoor_temperature']:.1f}°C "
+                    f"stress={obs['grid_stress_signal']:.2f} "
+                    f"cost=${obs['cumulative_cost']:.2f}",
+                    flush=True,
+                )
+        
+        except Exception as e:
+            last_error = str(e)
+            print(
+                f"[STEP] step={total_steps + 1} action=null "
+                f"reward=0.00 done=true error=\"{last_error}\"",
+                flush=True
+            )
+            break
+    
     elapsed = time.time() - start_time
     grade = env_client.grade()
-    print("[END]", flush=True)
-
+    
+    success = (total_steps > 0 and total_steps >= step_limit) or last_error is None
+    rewards_str = ",".join(f"{r:.2f}" for r in step_rewards)
+    
+    # Emit [END] with required fields
+    print(
+        f"[END] success={'true' if success else 'false'} steps={total_steps} rewards={rewards_str}",
+        flush=True
+    )
+    
     return {
         "task_id": task_id,
         "seed": seed,

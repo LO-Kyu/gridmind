@@ -3,54 +3,54 @@
   "api_base": "https://openrouter.ai/api/v1",
   "episodes_per_task": 1,
   "seed_base": 1000,
-  "fast_mode": false,
+  "fast_mode": true,
   "llm_every": 4,
   "max_steps": null,
   "task_averages": {
-    "1": 0.6841,
-    "2": 0.6354,
-    "3": 0.5762
+    "1": 0.7063,
+    "2": 0.6333,
+    "3": 0.5966
   },
-  "overall_average": 0.6319,
+  "overall_average": 0.6454,
   "all_results": [
     {
       "task_id": 1,
       "seed": 1100,
-      "total_reward": 249.86282530532836,
+      "total_reward": 251.40178983938813,
       "total_steps": 96,
-      "elapsed_sec": 89.6078360080719,
-      "score": 0.6841,
+      "elapsed_sec": 1.8465147018432617,
+      "score": 0.7063,
       "sub_scores": {
-        "cost": 0.684121466192583
+        "cost": 0.7063441549865395
       },
       "exploit_detected": false
     },
     {
       "task_id": 2,
       "seed": 1200,
-      "total_reward": 249.49791911192042,
+      "total_reward": 246.40262234598185,
       "total_steps": 96,
-      "elapsed_sec": 1.0353844165802002,
-      "score": 0.6354,
+      "elapsed_sec": 1.826324224472046,
+      "score": 0.6333,
       "sub_scores": {
-        "cost": 0.6979584216616654,
-        "temperature": 0.5416666666666666
+        "cost": 0.7014155357169216,
+        "temperature": 0.53125
       },
       "exploit_detected": false
     },
     {
       "task_id": 3,
       "seed": 1300,
-      "total_reward": 247.87201304624966,
+      "total_reward": 255.60231973463087,
       "total_steps": 96,
-      "elapsed_sec": 0.9833629131317139,
-      "score": 0.5762,
+      "elapsed_sec": 1.8300776481628418,
+      "score": 0.5966,
       "sub_scores": {
         "batch_deadline": 1,
-        "carbon": 0.6156696345619006,
-        "cost": 0.6199066683519812,
+        "carbon": 0.6574530318382599,
+        "cost": 0.670084941969173,
         "grid_response": 0.21428571428571427,
-        "temperature": 0.5833333333333334
+        "temperature": 0.5729166666666666
       },
       "exploit_detected": false
     }
