@@ -4,17 +4,23 @@ GridMind-RL Baseline Inference Script
 Runs an LLM agent against all 3 tasks for N episodes each.
 Uses the OpenAI Python client pointed at any OpenAI-compatible endpoint.
 
-Required environment variables:
-    API_BASE_URL  — The API endpoint for the LLM (default: HuggingFace router)
-    MODEL_NAME    — The model identifier to use for inference
-    OPENAI_API_KEY or HF_TOKEN — API key for authentication (any provider)
+Required environment variables (set in .env or shell):
+    API_BASE_URL   — The API endpoint for the LLM (default: OpenRouter)
+    MODEL_NAME     — The model identifier to use for inference
+    OPENAI_API_KEY — API key for authentication (works with any provider)
 
 Usage:
-    export API_BASE_URL=https://router.huggingface.co/v1
-    export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
-    export OPENAI_API_KEY=hf_xxxx   # or HF_TOKEN=hf_xxxx
+    # Option 1: Use .env file (recommended — just paste your key)
     python inference.py
-    # or: python inference.py --fast-mode --episodes 1
+
+    # Option 2: Set env vars manually
+    export API_BASE_URL=https://openrouter.ai/api/v1
+    export MODEL_NAME=meta-llama/llama-3.1-8b-instruct:free
+    export OPENAI_API_KEY=sk-or-v1-xxxx
+    python inference.py
+
+    # Option 3: Fast mode (no LLM, heuristic only)
+    python inference.py --fast-mode --episodes 1
 """
 
 from __future__ import annotations
@@ -29,11 +35,18 @@ from typing import Any
 import requests
 from openai import OpenAI
 
+# ── Load .env file (if present) ────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # reads .env from current directory or project root
+except ImportError:
+    pass  # python-dotenv not installed — env vars must be set manually
+
 # ── Constants ──────────────────────────────────────────────────────────────
 
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
-MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/llama-3.3-70b-instruct:free")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1")
 # Accept OPENAI_API_KEY (hackathon standard) or HF_TOKEN (HuggingFace convention)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "") or os.getenv("HF_TOKEN", "")
 DEFAULT_EPISODES = 1

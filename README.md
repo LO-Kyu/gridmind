@@ -1,311 +1,313 @@
-# GridMind-RL
+# ⚡ GridMind-RL
 
-**OpenEnv-style environment** for reinforcement learning and LLM agents on **building energy management**: HVAC, thermal storage, demand response, batch job scheduling, and load shedding under time-varying electricity prices and grid stress.
+**A real-world RL environment for building energy management** — control HVAC systems, thermal storage, batch job scheduling, and demand response under stochastic electricity prices and grid stress events.
 
----
-
-## Project overview
-
-GridMind-RL simulates a **24-hour** control horizon at **15-minute resolution** (96 steps per episode). The agent observes prices, temperature, storage, process load, grid stress, carbon intensity, and batch job deadlines; it acts with continuous and discrete controls aligned with real **demand response** and **industrial/commercial** load-shaping problems.
-
-**Why it matters:** Optimizing flexible loads against **time-of-use pricing** and **grid signals** reduces cost and emissions while respecting comfort and process constraints—an active area for RL and LLM-based control research.
-
-**Strengths for judges**
-
-| Area | Detail |
-|------|--------|
-| Spec | `openenv.yaml` documents server port, schemas, tasks, and endpoints |
-| API | REST: reset, step, state, grade, health, ping, replay, tasks, metrics |
-| Tasks | Three levels (easy / medium / hard) with deterministic episode grading |
-| Baseline | Root `inference.py` + OpenAI-compatible LLM client and heuristic fallback |
-| Ops | Multi-stage **Docker** image: Go environment + Python dashboard + deps |
+Built on the [OpenEnv](https://github.com/meta-pytorch/OpenEnv) specification. Containerized. Ready for Hugging Face Spaces.
 
 ---
 
-## Quick start (copy-paste)
+## 🎯 Why GridMind-RL?
 
-**Minimal flow** (API on **7860** only; keep Docker running, then run `python` in a **second** terminal from the repo root with `pip install -r python/requirements.txt` already done):
+Optimizing building energy use is a **real problem** that utilities, building managers, and industrial operators face every day. An agent must balance:
+
+- **Cost** — buy electricity when it's cheap, avoid peak pricing
+- **Comfort** — keep indoor temperature within comfortable bounds
+- **Grid compliance** — shed load when the grid signals demand-response events
+- **Scheduling** — complete batch processing jobs before their deadlines
+- **Carbon** — minimize carbon emissions by timing consumption to clean-grid periods
+
+This isn't a toy or a game. It's a simulation of decisions that **humans actually make** in industrial energy management, packaged as an RL environment where agents can learn to do it better.
+
+---
+
+## 📐 Observation Space
+
+Each timestep (15 minutes of simulated time), the agent receives:
+
+| Field | Type | Range | Description |
+|-------|------|-------|-------------|
+| `indoor_temperature` | float | 10–40 °C | Current building temperature |
+| `thermal_storage_level` | float | 0.0–1.0 | Thermal tank fill level (0=empty, 1=full) |
+| `process_demand` | float | ≥ 0 kW | Current industrial power demand |
+| `current_price` | float | > 0 $/kWh | Real-time electricity price |
+| `grid_stress_signal` | float | 0.0–1.0 | Utility demand-response urgency (>0.7 = critical) |
+| `carbon_intensity` | float | ≥ 0 gCO₂/kWh | Grid carbon intensity |
+| `hour_of_day` | int | 0–23 | Current hour |
+| `batch_queue` | int[] | — | Deadline slots of pending batch jobs |
+| `cumulative_cost` | float | ≥ 0 $ | Total energy cost so far this episode |
+| `step` | int | 0–95 | Current timestep (96 steps = 24 hours) |
+| `building_id` | int | 0+ | Building index in multi-building mode |
+
+## 🕹️ Action Space
+
+Each timestep, the agent sends:
+
+| Field | Type | Range | Description |
+|-------|------|-------|-------------|
+| `hvac_power_level` | float | 0.0–1.0 | Fraction of max HVAC power (0=off, 1=full) |
+| `thermal_charge_rate` | float | -1.0–1.0 | Charge (+) or discharge (-) thermal storage |
+| `batch_job_slot` | int | 0–4 | Schedule next batch job: 0=now, 1–4=defer |
+| `load_shed_fraction` | float | 0.0–0.5 | Fraction of non-critical load to shed |
+| `building_id` | int | 0+ | Which building this action targets |
+
+## 💰 Reward Structure
+
+The environment provides a **dense, multi-component reward** every step — not just a binary win/lose at the end. Each step returns a scalar `reward` (the sum) plus a detailed `reward_components` breakdown:
+
+| Component | Key | Description |
+|-----------|-----|-------------|
+| Cost Savings | `cost_savings` | Rewards reducing energy spend vs baseline |
+| Temperature | `temp_constraint` | Gaussian bonus near setpoint, penalty outside bounds |
+| Grid Response | `grid_response` | Bonus for shedding load during grid stress |
+| Efficiency | `efficiency_bonus` | Thermal storage arbitrage + balanced usage |
+| Stability | `stability_penalty` | Rewards smooth control, penalizes oscillation |
+| Deadlines | `deadline_penalty` | Penalty for missed batch jobs |
+| Carbon | `carbon_reward` | Bonus for low-carbon operation |
+
+---
+
+## 📋 Tasks (3 difficulty levels)
+
+Each task defines a concrete objective with a **deterministic programmatic grader** that scores performance from **0.0 to 1.0**.
+
+| ID | Difficulty | Name | What the Agent Must Do | Grader Weights |
+|----|:----------:|------|------------------------|----------------|
+| 1 | 🟢 Easy | **Cost Minimization** | Minimize total energy cost over 24 hours. No temperature or scheduling constraints. | cost: 100% |
+| 2 | 🟡 Medium | **Constrained Temperature** | Minimize cost **and** keep temperature within 19–23°C at all times. | cost: 60%, temperature: 40% |
+| 3 | 🔴 Hard | **Full Demand Response** | Minimize cost, maintain temperature, respond to grid stress, complete batch jobs on time, minimize carbon. | cost: 28%, temperature: 20%, grid: 20%, batch: 12%, carbon: 20% |
+
+**Graders are deterministic**: given the same seed, the same actions always produce the same score.
+
+---
+
+## 🚀 Getting Started (Step by Step)
+
+### Prerequisites
+
+- **Docker** — [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- **Python 3.9+** — [Download Python](https://www.python.org/downloads/)
+- **Git** — [Download Git](https://git-scm.com/downloads)
+
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/LO-Kyu/gridmind.git
+cd gridmind
+```
+
+### Step 2: Build and Start the Environment Server
 
 ```bash
 docker build -t gridmind-rl .
-docker run -p 7860:7860 gridmind-rl
-
-python inference.py --fast-mode --episodes 1
+docker run --rm -d -p 7860:7860 --name gridmind gridmind-rl
 ```
 
-### 1. Build and run (Docker)
-
-From the **repository root**:
+This starts the GridMind-RL environment server on port **7860**. Verify it's running:
 
 ```bash
-docker build -t gridmind-rl .
-docker run --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl
+# Linux/macOS
+curl http://localhost:7860/health
+
+# Windows (PowerShell)
+Invoke-RestMethod -Uri http://localhost:7860/health
 ```
 
-- **7860** — Environment API (OpenEnv / agent traffic); http://localhost:7860  
-- **7861** — Web dashboard (optional); http://localhost:7861  
+You should see: `{"status":"ok","version":"1.0.0"}`
 
-**Windows (PowerShell)** — same commands in a terminal with Docker Desktop running.
+### Step 3: Install Python Dependencies
 
-### 2. Validate the API (optional)
-
-With the container running, from the repo root (host Python with `requests`):
-
-```bash
-pip install requests
-python python/validate.py --env-url http://localhost:7860
-```
-
-### 3. Run baseline inference
-
-On the **host** (not inside the container unless you set `--env-url` to the env server):
+Open a **new terminal** (keep Docker running) and install:
 
 ```bash
 pip install -r python/requirements.txt
 ```
 
-**Windows — PowerShell:**
+### Step 4: Get a Free API Key
 
-```powershell
-$env:ENV_URL="http://localhost:7860"
-python inference.py --fast-mode --episodes 1
+The inference script uses an LLM to make decisions. You need a **free** API key:
+
+1. Go to [openrouter.ai/keys](https://openrouter.ai/keys)
+2. Sign in with Google or GitHub (free)
+3. Click **"Create Key"** and copy it
+
+### Step 5: Configure Your API Key
+
+Open the `.env` file in the project root and paste your key:
+
+```env
+API_BASE_URL=https://openrouter.ai/api/v1
+MODEL_NAME=meta-llama/llama-3.1-8b-instruct:free
+OPENAI_API_KEY=sk-or-v1-paste-your-actual-key-here
+ENV_URL=http://localhost:7860
 ```
 
-**Windows — Command Prompt (cmd):**
+> **Note:** The model `meta-llama/llama-3.1-8b-instruct:free` is **completely free** on OpenRouter. No credit card needed.
 
-```bat
-set ENV_URL=http://localhost:7860
-python inference.py --fast-mode --episodes 1
-```
-
-**Linux / macOS:**
+### Step 6: Run the Baseline Inference
 
 ```bash
-export ENV_URL=http://localhost:7860
+# Run LLM agent on all 3 tasks
+python inference.py --episodes 1
+
+# Or run without LLM (fast heuristic mode — no API key needed)
 python inference.py --fast-mode --episodes 1
 ```
 
-You can run the same entrypoint directly with `python python/inference.py` (e.g. `python python/inference.py --fast-mode`); flags match the root `inference.py` wrapper.
+The script will:
+1. Connect to the environment server
+2. Run the agent on Task 1 (easy), Task 2 (medium), Task 3 (hard)
+3. Print `[START]`, `[STEP1]`...`[STEP96]`, `[END]` for each episode
+4. Save results to `baseline_scores.json`
 
-**LLM baseline** (requires any OpenAI-compatible API credentials — HuggingFace, Groq, etc.):
+### Step 7: Stop the Server (When Done)
 
 ```bash
-export ENV_URL=http://localhost:7860
-export API_BASE_URL=https://router.huggingface.co/v1
-export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
-export OPENAI_API_KEY=your_token_here   # or HF_TOKEN=your_token_here
-python inference.py --episodes 1 --llm-every 4
+docker stop gridmind
 ```
 
-> **Note:** The script accepts either `OPENAI_API_KEY` (hackathon standard) or `HF_TOKEN` (HuggingFace convention). You do **not** need a paid OpenAI key — any OpenAI-compatible provider works.
+---
 
-Results are written to `baseline_scores.json` by default (`--output` to change).
+## 📊 Baseline Scores
+
+Produced by running `python inference.py --fast-mode --episodes 1` (heuristic policy):
+
+| Task | Difficulty | Score | Details |
+|------|:----------:|:-----:|---------|
+| 1 — Cost Minimization | 🟢 Easy | **0.7063** | cost: 0.706 |
+| 2 — Temperature Management | 🟡 Medium | **0.6333** | cost: 0.701, temperature: 0.531 |
+| 3 — Full Demand Response | 🔴 Hard | **0.5966** | cost: 0.670, temp: 0.573, grid: 0.214, batch: 1.000, carbon: 0.657 |
+| **Overall Average** | | **0.6454** | |
+
+Scores are in the **0.0–1.0** range. Higher is better.
 
 ---
 
-## Tasks
+## 🔌 HTTP API Reference
 
-| ID | Difficulty | Name | Objective |
-|----|------------|------|-----------|
-| 1 | Easy | Cost minimization | Minimize total energy cost over the episode. No temperature or batch-job objectives in the grade. |
-| 2 | Medium | Constrained temperature | Minimize cost while keeping indoor temperature within **±2 °C** of setpoint (19–23 °C) for graded temperature compliance. |
-| 3 | Hard | Full demand response | Minimize cost, maintain temperature, respond to **grid stress** (e.g. shed load when stress is high), complete **batch jobs** on time, and reduce **carbon** vs a baseline policy in the composite score. |
-
-Episode **grade** is returned by `GET /grade` after the episode completes (or after a partial run if you stopped stepping early). Sub-scores are task-dependent and documented in code (`env/tasks.go`).
-
----
-
-## Reward Structure
-
-The environment uses a **dense, multi-component reward** signal. Each step returns a scalar `reward` (the sum) and a detailed `reward_components` breakdown in `info`:
-
-| Component | Key | Active | Description |
-|-----------|-----|--------|-------------|
-| **Cost Savings** | `cost_savings` | All tasks | Positive baseline (1.5) minus relative step cost. Smart agents that reduce energy use earn higher rewards. |
-| **Temperature Constraint** | `temp_constraint` | Task 2, 3 | Gaussian bonus for staying near setpoint (21°C). Max +1.5 at setpoint, degrades toward bounds, penalty outside [19°C, 23°C]. |
-| **Grid Demand Response** | `grid_response` | Task 3 | Bonus for shedding load during high grid stress (>0.7), readiness bonus during moderate stress, penalty for unnecessary shedding. |
-| **Efficiency Bonus** | `efficiency_bonus` | All tasks | Rewards thermal storage arbitrage (charge during cheap prices, discharge during expensive) and maintaining useful storage levels. |
-| **Stability Reward** | `stability_penalty` | All tasks | Positive reward for smooth, stable control; penalty for rapid HVAC/storage oscillation. |
-| **Deadline Penalty** | `deadline_penalty` | Task 2, 3 | Penalty per missed batch job deadline (-1.5 each). Positive bonus for keeping jobs on track. |
-| **Carbon Reward** | `carbon_reward` | Task 3 | Baseline bonus for low-carbon operation, reduced by carbon-heavy consumption. Extra bonus during clean grid periods. |
-
-**Grading weights (Task 3):** cost 28%, temperature 20%, grid_response 20%, batch_deadline 12%, carbon 20%.
-
----
-
-## HTTP API
-
-Base URL: `http://<host>:7860` (default in container: port **7860**).
+Base URL: `http://localhost:7860`
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/health` | Liveness; JSON `status`, `version` |
-| GET | `/ping` | Lightweight liveness; JSON `status` |
-| POST | `/reset` | Start episode: body e.g. `{"task_id": 1, "seed": 42, "num_buildings": 1}` |
-| POST | `/step` | Advance one step: JSON action or array of actions (multi-building) |
-| GET | `/state` | Full snapshot: buildings, downsampled price/carbon curves, step, task, etc. |
-| GET | `/grade` | Episode score in `[0, 1]`, sub-scores, exploit flags |
-| GET | `/replay` | Step replay list |
-| GET | `/tasks` | Task metadata and grader weights |
-| GET | `/metrics` | Prometheus-style text metrics |
+| `GET` | `/health` | Health check → `{"status":"ok","version":"1.0.0"}` |
+| `GET` | `/ping` | Lightweight liveness check |
+| `POST` | `/reset` | Start a new episode. Body: `{"task_id": 1, "seed": 42}` |
+| `POST` | `/step` | Take one action. Body: action JSON (see Action Space above) |
+| `GET` | `/state` | Full environment state snapshot |
+| `GET` | `/grade` | Episode score (0.0–1.0) with sub-scores |
+| `GET` | `/replay` | Full step-by-step replay of the episode |
+| `GET` | `/tasks` | List all task definitions and grader weights |
+| `GET` | `/metrics` | Prometheus-format operational metrics |
 
-**Action JSON fields** (single building): `hvac_power_level`, `thermal_charge_rate`, `batch_job_slot`, `load_shed_fraction`, optional `building_id`.
-
-Schemas and primary endpoints: **`openenv.yaml`** at repo root (see Notes for additional endpoints like `/metrics`).
-
----
-
-## Evaluation modes (`inference.py`)
-
-There is **no** `--judge-mode` flag in this repository. Use the modes below.
-
-| Mode | Command pattern | Behavior |
-|------|-----------------|----------|
-| **Fast (heuristic)** | `python inference.py --fast-mode` | No LLM calls; deterministic given env seed; fastest for CI or smoke tests. |
-| **Default LLM** | `python inference.py` | Uses OpenAI Python client (`API_BASE_URL`, `MODEL_NAME`, `OPENAI_API_KEY` or `HF_TOKEN`); default `--llm-every 4` reuses each LLM action for 4 steps to limit API cost. |
-| **Recommended for automated evaluation / judging** | `python inference.py --fast-mode --episodes 1` | Recommended when automated pipelines need **reproducibility** and **no external API** dependency. |
-
-Other useful flags:
-
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--episodes` | `1` | Episodes per task (tasks 1–3 run in sequence) |
-| `--env-url` | `ENV_URL` or `http://localhost:7860` | Environment base URL |
-| `--llm-every` | `4` | Steps per LLM call (ignored in `--fast-mode`) |
-| `--max-steps` | full episode | Stop after N steps; grade reflects **partial** episode |
-| `--output` | `baseline_scores.json` | Results path |
-| `--verbose` | off | Extra step logs |
-
----
-
-## Logging format (baseline)
-
-For each episode the script prints, in order:
-
-1. **`[START]`** — episode beginning (after `reset`)  
-2. **`[STEP1]` … `[STEP96]`** (full episode) — one line per successful `POST /step`; a full episode has **96** steps (`[STEP1]` through `[STEP96]`) unless `--max-steps` or an early error stops the loop  
-3. **`[END]`** — after `GET /grade` for that episode  
-
-Additional lines (banners, task headers, `[OK]` / `[WARN]`) may appear; parsers should match the bracketed markers above.
-
-Example shape:
-
-```text
-[START]
-[STEP1]
-[STEP2]
-...
-[STEP96]
-[END]
-```
-
----
-
-## Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│  Client: python inference.py (LLM or heuristic)             │
-│       │ HTTP (reset / step / grade)                         │
-│       ▼                                                     │
-│  ┌──────────────────┐     ┌─────────────────────────────┐ │
-│  │ gridmind-server  │     │  Dashboard (optional)        │ │
-│  │  Go :7860        │◄────│  FastAPI + static UI :7861   │ │
-│  │  env/* simulation│     │  proxies /api → :7860       │ │
-│  └──────────────────┘     └─────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
-
-- **Core:** `main.go` + `env/` (physics, rewards, tasks, grading)  
-- **Baseline:** `inference.py` (root) → `python/inference.py`  
-- **Dashboard:** `dashboard/server.py`, `dashboard/static/`  
-- **Spec:** `openenv.yaml`
-
----
-
-## Docker (detailed)
-
-| Step | Command |
-|------|---------|
-| Build | `docker build -t gridmind-rl .` |
-| Run (foreground) | `docker run --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl` |
-| Run (background) | `docker run -d --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl` |
-| Stop (background) | `docker stop gridmind` |
-| Inference **inside** container | `docker exec -it gridmind python /app/inference.py --fast-mode --env-url http://127.0.0.1:7860` |
-
-The image runs **supervisord** as a non-root user with two programs: Go server (`PORT=7860`) and uvicorn dashboard (`7861`).
-
----
-
-## Notes for judges and operators
-
-| Topic | Detail |
-|-------|--------|
-| **Ports** | **7860** = environment API; **7861** = dashboard. Some hosts only expose one public port—API is the required one for OpenEnv-style evaluation. |
-| **Episode length** | **96 steps** = 24 h at 15 min/step. Observation `step` is **0–95** for a full episode. |
-| **`openenv.yaml`** | Lists main endpoints; **`/metrics`** exists at runtime but may not appear in the YAML block—treat as an extra ops endpoint. |
-| **Reproducibility** | Env is seed-controlled. LLM outputs may still vary by provider even at `temperature=0`. |
-| **`--max-steps`** | Produces a **partial** episode; final `GET /grade` reflects that partial trajectory. |
-| **Manual run (no Docker)** | Install Go 1.21+, `go run .` from repo root (default port 7860); install Python deps and run `python inference.py` as above. |
-| **Runtime** | The baseline completes within typical hackathon limits (<20 minutes). |
-
----
-
-## Example API Calls
-
-With the container running (`docker run -p 7860:7860 gridmind-rl`):
+### Example API Calls
 
 ```bash
-# Health check
-curl http://localhost:7860/health
-# → {"status":"ok","version":"1.0.0"}
-
-# Reset to Task 3 (hard) with seed 42
+# Reset to Task 1 (easy) with seed 42
 curl -X POST http://localhost:7860/reset \
   -H "Content-Type: application/json" \
-  -d '{"task_id": 3, "seed": 42, "num_buildings": 1}'
-# → {"observations":[{"indoor_temperature":21.3,...}],"episode":1,"task_id":3,"seed":42}
+  -d '{"task_id": 1, "seed": 42}'
 
 # Take one step
 curl -X POST http://localhost:7860/step \
   -H "Content-Type: application/json" \
-  -d '{"hvac_power_level": 0.6, "thermal_charge_rate": 0.3, "batch_job_slot": 1, "load_shed_fraction": 0.1}'
-# → {"observation":{...},"reward":2.15,"done":false,"info":{"reward_components":{...},...}}
+  -d '{"hvac_power_level": 0.5, "thermal_charge_rate": 0.1, "batch_job_slot": 1, "load_shed_fraction": 0.0}'
 
-# Get current state
-curl http://localhost:7860/state
-# → {"buildings":[...],"price_curve_episode":[...],"step":1,"task_id":3,...}
-
-# Grade after episode ends (run 96 steps first)
+# Check score after episode
 curl http://localhost:7860/grade
-# → {"task_id":3,"score":0.3115,"sub_scores":{"cost":0.25,"temperature":0.14,...},...}
-
-# List all tasks
-curl http://localhost:7860/tasks
-# → [{"id":1,"name":"Cost Minimization","difficulty":"easy",...},...]
 ```
 
 ---
 
-## Hugging Face Space Deployment
+## 🏗️ Architecture
 
-### 1. Create a new HF Space
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  inference.py (LLM Agent or Heuristic)                          │
+│       │                                                         │
+│       │ HTTP: POST /reset, /step  ·  GET /grade, /state         │
+│       ▼                                                         │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Docker Container                                         │  │
+│  │                                                           │  │
+│  │  ┌─────────────────────┐   ┌───────────────────────────┐ │  │
+│  │  │  Go Environment     │   │  Python Dashboard         │ │  │
+│  │  │  Server (:7860)     │   │  FastAPI + UI (:7861)     │ │  │
+│  │  │                     │   │                           │ │  │
+│  │  │  • Physics engine   │   │  • Proxies /api → :7860  │ │  │
+│  │  │  • Reward function  │◄──│  • Real-time charts      │ │  │
+│  │  │  • Task graders     │   │  • State visualization   │ │  │
+│  │  └─────────────────────┘   └───────────────────────────┘ │  │
+│  │                                                           │  │
+│  │  Isolated · Reproducible · Non-root user                  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-Go to [huggingface.co/new-space](https://huggingface.co/new-space) and create a **Docker** space. Select:
+### Project Structure
+
+```
+gridmind/
+├── inference.py              ← Hackathon entrypoint (root)
+├── openenv.yaml              ← OpenEnv spec manifest
+├── Dockerfile                ← Multi-stage build (Go + Python)
+├── .env                      ← API credentials (git-ignored)
+├── baseline_scores.json      ← Produced by inference.py
+│
+├── main.go                   ← HTTP server (routes, middleware, metrics)
+├── env/                      ← Core environment logic (Go)
+│   ├── environment.go        ← Simulation: physics, thermal dynamics
+│   ├── models.go             ← All data types (Observation, Action, etc.)
+│   ├── rewards.go            ← 7-component dense reward function
+│   └── tasks.go              ← 3 task definitions + deterministic graders
+│
+├── python/                   ← Python support layer
+│   ├── inference.py          ← Full LLM agent + heuristic fallback
+│   ├── models.py             ← Typed Pydantic models (mirrors Go structs)
+│   ├── validate.py           ← OpenEnv spec validation suite
+│   └── requirements.txt      ← Python dependencies
+│
+├── tests/                    ← Automated tests
+│   ├── environment_test.go   ← Go unit tests (determinism, bounds, etc.)
+│   └── test_graders.py       ← Python grader tests (pytest)
+│
+└── dashboard/                ← Optional web dashboard
+    ├── server.py             ← FastAPI server
+    └── static/               ← Frontend assets
+```
+
+---
+
+## 🐳 Docker
+
+| Action | Command |
+|--------|---------|
+| **Build** | `docker build -t gridmind-rl .` |
+| **Run (foreground)** | `docker run --rm -p 7860:7860 --name gridmind gridmind-rl` |
+| **Run (background)** | `docker run --rm -d -p 7860:7860 --name gridmind gridmind-rl` |
+| **Stop** | `docker stop gridmind` |
+| **Run inference inside container** | `docker exec -it gridmind python /app/inference.py --fast-mode` |
+
+The Dockerfile uses a **multi-stage build**:
+1. **Stage 1** — Go 1.21 Alpine: compiles the environment server binary
+2. **Stage 2** — Python 3.11 slim: runs the Go binary + Python dashboard via Supervisor
+
+---
+
+## ☁️ Hugging Face Space Deployment
+
+### 1. Create a New Space
+
+Go to [huggingface.co/new-space](https://huggingface.co/new-space):
 - **SDK:** Docker
-- **Hardware:** CPU Basic (2 vCPU, 16GB)
+- **Hardware:** CPU Basic (2 vCPU, 16 GB — free tier)
 
-### 2. Push code to HF
+### 2. Push to HF
 
 ```bash
-# Clone and push
 git remote add hf https://huggingface.co/spaces/YOUR_USERNAME/gridmind-rl
 git push hf main
 ```
 
-### 3. Verify deployment
-
-Once the Space builds, verify at your Space URL:
+### 3. Verify
 
 ```bash
 curl https://YOUR_USERNAME-gridmind-rl.hf.space/health
@@ -316,10 +318,91 @@ curl -X POST https://YOUR_USERNAME-gridmind-rl.hf.space/reset \
   -d '{"task_id":1,"seed":42}'
 ```
 
-> **Note:** HF Spaces only exposes **one port** publicly. Port **7860** (the OpenEnv API) is the primary port and will be the public endpoint. The dashboard on port 7861 is for local development only.
+> **Note:** HF Spaces exposes port **7860** publicly. The dashboard (7861) is for local development only.
 
 ---
 
-## License
+## 🧪 Testing
+
+### Run Go Unit Tests
+
+```bash
+cd gridmind
+go test ./tests/ -v
+```
+
+### Run Python Grader Tests (requires server running)
+
+```bash
+pytest tests/test_graders.py -v
+```
+
+### Run Full OpenEnv Validation
+
+```bash
+python python/validate.py --env-url http://localhost:7860
+```
+
+---
+
+## 📝 Inference Script Reference
+
+The `inference.py` script at the project root is the **hackathon entrypoint**.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `API_BASE_URL` | `https://openrouter.ai/api/v1` | LLM API endpoint |
+| `MODEL_NAME` | `meta-llama/llama-3.1-8b-instruct:free` | Model to use |
+| `OPENAI_API_KEY` | — | API key (any OpenAI-compatible provider) |
+| `ENV_URL` | `http://localhost:7860` | Environment server URL |
+
+### Command-Line Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--episodes N` | 1 | Episodes per task (tasks 1–3 run in sequence) |
+| `--fast-mode` | off | Use heuristic policy only (no LLM, fully reproducible) |
+| `--llm-every N` | 4 | Reuse each LLM action for N steps (reduces API calls) |
+| `--max-steps N` | 96 | Stop early after N steps |
+| `--env-url URL` | from env | Override environment URL |
+| `--output FILE` | `baseline_scores.json` | Output results file |
+| `--verbose` | off | Print detailed step logs |
+
+### Stdout Log Format
+
+Each episode emits structured markers for automated evaluation:
+
+```
+[START]
+[STEP1]
+[STEP2]
+...
+[STEP96]
+[END]
+```
+
+---
+
+## 📎 OpenEnv Spec Compliance
+
+| Requirement | Status |
+|-------------|--------|
+| `openenv.yaml` with metadata | ✅ |
+| Typed Pydantic models (Observation, Action, Reward) | ✅ |
+| `step(action)` → observation, reward, done, info | ✅ |
+| `reset()` → initial observation | ✅ |
+| `state()` → current state | ✅ |
+| 3 tasks with programmatic graders (0.0–1.0) | ✅ |
+| Dense reward function (not binary) | ✅ |
+| Baseline inference using OpenAI client | ✅ |
+| Working Dockerfile | ✅ |
+| Deterministic with seed | ✅ |
+| Exploit detection | ✅ |
+
+---
+
+## 📄 License
 
 See `LICENSE` in the repository.
