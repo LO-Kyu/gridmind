@@ -99,7 +99,7 @@ cd gridmind
 
 ```bash
 docker build -t gridmind-rl .
-docker run --rm -d -p 7860:7860 --name gridmind gridmind-rl
+docker run --rm -d -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl
 ```
 
 This starts the GridMind-RL environment server on port **7860**. Verify it's running:
@@ -281,8 +281,8 @@ gridmind/
 | Action | Command |
 |--------|---------|
 | **Build** | `docker build -t gridmind-rl .` |
-| **Run (foreground)** | `docker run --rm -p 7860:7860 --name gridmind gridmind-rl` |
-| **Run (background)** | `docker run --rm -d -p 7860:7860 --name gridmind gridmind-rl` |
+| **Run (foreground)** | `docker run --rm -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl` |
+| **Run (background)** | `docker run --rm -d -p 7860:7860 -p 7861:7861 --name gridmind gridmind-rl` |
 | **Stop** | `docker stop gridmind` |
 | **Run inference inside container** | `docker exec -it gridmind python /app/inference.py --fast-mode` |
 
