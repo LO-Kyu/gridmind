@@ -160,7 +160,7 @@ Three independent tasks with **deterministic programmatic graders**. Scores rang
 ### Prerequisites
 
 - **Docker** — [Download Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- **Python 3.9+** — [Download Python](https://www.python.org/downloads/)
+- **Python 3.10+** — [Download Python](https://www.python.org/downloads/)
 - **Git** — [Download Git](https://git-scm.com/downloads)
 
 ### Quick Start (5 minutes)
