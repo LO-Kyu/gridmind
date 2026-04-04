@@ -1,56 +1,56 @@
 {
-  "model": "meta-llama/Llama-3.1-8B-Instruct",
-  "api_base": "https://router.huggingface.co/v1",
+  "model": "meta-llama/llama-3.3-70b-instruct:free",
+  "api_base": "https://openrouter.ai/api/v1",
   "episodes_per_task": 1,
   "seed_base": 1000,
-  "fast_mode": true,
+  "fast_mode": false,
   "llm_every": 4,
   "max_steps": null,
   "task_averages": {
-    "1": 0.7063,
-    "2": 0.6333,
-    "3": 0.5966
+    "1": 0.6841,
+    "2": 0.6354,
+    "3": 0.5762
   },
-  "overall_average": 0.6454,
+  "overall_average": 0.6319,
   "all_results": [
     {
       "task_id": 1,
       "seed": 1100,
-      "total_reward": 251.40178983938813,
+      "total_reward": 249.86282530532836,
       "total_steps": 96,
-      "elapsed_sec": 0.14183712005615234,
-      "score": 0.7063,
+      "elapsed_sec": 89.6078360080719,
+      "score": 0.6841,
       "sub_scores": {
-        "cost": 0.7063441549865395
+        "cost": 0.684121466192583
       },
       "exploit_detected": false
     },
     {
       "task_id": 2,
       "seed": 1200,
-      "total_reward": 246.40262234598185,
+      "total_reward": 249.49791911192042,
       "total_steps": 96,
-      "elapsed_sec": 0.11959218978881836,
-      "score": 0.6333,
+      "elapsed_sec": 1.0353844165802002,
+      "score": 0.6354,
       "sub_scores": {
-        "cost": 0.7014155357169216,
-        "temperature": 0.53125
+        "cost": 0.6979584216616654,
+        "temperature": 0.5416666666666666
       },
       "exploit_detected": false
     },
     {
       "task_id": 3,
       "seed": 1300,
-      "total_reward": 255.60231973463087,
+      "total_reward": 247.87201304624966,
       "total_steps": 96,
-      "elapsed_sec": 0.12531447410583496,
-      "score": 0.5966,
+      "elapsed_sec": 0.9833629131317139,
+      "score": 0.5762,
       "sub_scores": {
         "batch_deadline": 1,
-        "carbon": 0.6574530318382599,
-        "cost": 0.670084941969173,
+        "carbon": 0.6156696345619006,
+        "cost": 0.6199066683519812,
         "grid_response": 0.21428571428571427,
-        "temperature": 0.5729166666666666
+        "temperature": 0.5833333333333334
       },
       "exploit_detected": false
     }
