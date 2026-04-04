@@ -513,7 +513,7 @@ async function fetchAndUpdate() {
     const step = state.step;
 
     // ── Header ──
-    document.getElementById('ep-step').textContent = `ep:${state.episode} step:${step}/${EPISODE_STEPS - 1}`;
+    document.getElementById('ep-step').textContent = `ep:${state.episode} step:${step}/${EPISODE_STEPS}`;
     document.getElementById('task-badge').textContent = TASK_NAMES[state.task_id] || 'Task 1';
 
     // ── KPIs ──
@@ -546,7 +546,8 @@ async function fetchAndUpdate() {
       priceChart.data.labels = labels;
       priceChart.data.datasets[0].data = state.price_curve_episode;
       const marker = Array(CURVE_POINTS).fill(null);
-      marker[Math.floor(step / 4)] = state.price_curve_episode[Math.floor(step / 4)];
+      const markerIdx = Math.min(Math.floor(step / 4), CURVE_POINTS - 1);
+      marker[markerIdx] = state.price_curve_episode[markerIdx];
       priceChart.data.datasets[1].data = marker;
       priceChart.update('none');
     }
