@@ -49,12 +49,17 @@ RUN echo "[supervisord]" > /etc/supervisor/conf.d/supervisord.conf && \
     echo "stderr_logfile=/dev/stderr" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "stderr_logfile_maxbytes=0" >> /etc/supervisor/conf.d/supervisord.conf
 
+# Create run directory for supervisor
+RUN mkdir -p /var/run/supervisor /var/log/supervisor && \
+    chmod 755 /var/run/supervisor /var/log/supervisor
+
 # Add a non-root user (good practice and required for some HF Spaces configs)
-RUN useradd -m -u 1000 user
-RUN chown -R user:user /app
-USER user
+RUN useradd -m -u 1000 user && \
+    chown -R user:user /app && \
+    chown -R user:user /var/run/supervisor /var/log/supervisor
 
 # 7860 = Env Server (main OpenEnv endpoint), 7861 = Dashboard
 EXPOSE 7860 7861
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# Run supervisor as root to manage both services (required for multi-process supervision)
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf", "-n"]

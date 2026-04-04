@@ -1,0 +1,2 @@
+[console_scripts]
+gridmind-server = server.app:main
