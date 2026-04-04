@@ -54,6 +54,7 @@ Repository = "https://github.com/meta-pytorch/OpenEnv"
 Documentation = "https://github.com/meta-pytorch/OpenEnv"
 
 [project.scripts]
+server = "server.app:main"
 gridmind-server = "server.app:main"
 
 [tool.setuptools]
