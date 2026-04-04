@@ -18,7 +18,7 @@
       "seed": 1100,
       "total_reward": 251.40178983938813,
       "total_steps": 96,
-      "elapsed_sec": 1.8465147018432617,
+      "elapsed_sec": 1.2027783393859863,
       "score": 0.7063,
       "sub_scores": {
         "cost": 0.7063441549865395
@@ -30,7 +30,7 @@
       "seed": 1200,
       "total_reward": 246.40262234598185,
       "total_steps": 96,
-      "elapsed_sec": 1.826324224472046,
+      "elapsed_sec": 1.2154290676116943,
       "score": 0.6333,
       "sub_scores": {
         "cost": 0.7014155357169216,
@@ -43,7 +43,7 @@
       "seed": 1300,
       "total_reward": 255.60231973463087,
       "total_steps": 96,
-      "elapsed_sec": 1.8300776481628418,
+      "elapsed_sec": 1.2423679828643799,
       "score": 0.5966,
       "sub_scores": {
         "batch_deadline": 1,
