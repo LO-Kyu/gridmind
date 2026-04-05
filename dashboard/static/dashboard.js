@@ -1,6 +1,6 @@
 /**
  * GridMind-RL Dashboard — Premium Chart.js real-time visualization
- * Polls /api/state every 500ms and updates all charts + KPIs.
+ * Polls /dashboard/api/state every 500ms and updates all charts + KPIs.
  */
 
 'use strict';
@@ -10,7 +10,7 @@ const POLL_MS        = 500;
 const EPISODE_STEPS  = 96;    // 24h × 4 steps/h (15-min)
 const HISTORY_LEN    = EPISODE_STEPS;
 const CURVE_POINTS   = 24;    // hourly downsample (EpisodeSteps/4)
-const API_BASE       = '/api';
+const API_BASE       = '/dashboard/api';
 const TASK_NAMES = {
   1: 'Task 1 — Cost Minimization (Easy)',
   2: 'Task 2 — Temperature Management (Medium)',
