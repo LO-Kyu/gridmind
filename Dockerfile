@@ -3,7 +3,7 @@ FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum* ./
-RUN go mod download || true
+RUN go mod download 2>/dev/null || true && go mod verify 2>/dev/null || true
 
 COPY main.go ./
 COPY env/ ./env/
@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y supervisor && rm -rf /var/lib/apt/lists
 # Install Python dependencies
 COPY python/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt || \
-    pip install --no-cache-dir openai httpx pydantic "pydantic>=2.0.0" requests
+    pip install --no-cache-dir openai httpx pydantic requests fastapi uvicorn python-dotenv
 
 # Copy Go binary
 COPY --from=builder /app/gridmind-server /usr/local/bin/gridmind-server

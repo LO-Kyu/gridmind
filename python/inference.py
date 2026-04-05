@@ -375,9 +375,6 @@ def run_episode(
     elapsed = time.time() - start_time
     grade = env_client.grade()
     
-    success = (total_steps > 0 and total_steps >= step_limit) or last_error is None
-    rewards_str = ",".join(f"{r:.2f}" for r in step_rewards)
-    
     # Emit [END] with required fields
     print(
         f"[END] success={'true' if success else 'false'} steps={total_steps} rewards={rewards_str}",
