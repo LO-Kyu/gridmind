@@ -8,9 +8,13 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,8 +36,8 @@ type Metrics struct {
 	rewardMin        float64
 	rewardMax        float64
 	// Histograms
-	actionBuckets    map[string]int64 // hvac bucket counts
-	errorCount       int64
+	actionBuckets map[string]int64 // hvac bucket counts
+	errorCount    int64
 }
 
 var metrics = &Metrics{
@@ -143,6 +147,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/grade", s.handleGrade)
 	mux.HandleFunc("/tasks", s.handleTasks)
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	// Reverse proxy for dashboard (runs on port 7861 internally)
+	mux.HandleFunc("/dashboard", s.handleDashboardProxy)
+	mux.HandleFunc("/dashboard/", s.handleDashboardProxy)
 	return mux
 }
 
@@ -333,6 +340,58 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, metrics.prometheus())
 }
 
+// ── /dashboard (Reverse Proxy) ────────────────────────────────────────────
+
+func (s *Server) handleDashboardProxy(w http.ResponseWriter, r *http.Request) {
+	// Target URL for the dashboard service (running on localhost:7861)
+	target, err := url.Parse("http://localhost:7861")
+	if err != nil {
+		http.Error(w, "proxy configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	// Create a custom director to modify the request
+	director := func(req *http.Request) {
+		// Strip /dashboard prefix
+		path := req.URL.Path
+		if strings.HasPrefix(path, "/dashboard") {
+			path = strings.TrimPrefix(path, "/dashboard")
+			if path == "" {
+				path = "/"
+			}
+		}
+
+		// Set up the new request
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		if target.Path != "" {
+			req.URL.Path = target.Path + path
+		} else {
+			req.URL.Path = path
+		}
+		req.RequestURI = ""
+
+		// Preserve original host header for dashboard API calls
+		if req.Header.Get("X-Forwarded-Host") == "" {
+			req.Header.Set("X-Forwarded-For", getClientIP(r))
+			req.Header.Set("X-Forwarded-Proto", "https")
+		}
+	}
+
+	// Use ReverseProxy with custom director
+	proxy := &httputil.ReverseProxy{Director: director}
+	proxy.ServeHTTP(w, r)
+}
+
+// Helper: extract client IP from request
+func getClientIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
 // ──────────────────────────────────────────────
 // Entry point
 // ──────────────────────────────────────────────
@@ -354,7 +413,7 @@ func main() {
 	srv.envMgr.Reset(env.ResetRequest{Seed: &seed, TaskID: 1, NumBuildings: 1})
 
 	log.Printf("GridMind-RL environment server starting on :%s", port)
-	log.Printf("Endpoints: GET /health /ping /state /replay /grade /tasks /metrics | POST /reset /step")
+	log.Printf("Endpoints: GET /health /ping /state /replay /grade /tasks /metrics /dashboard | POST /reset /step")
 
 	mux := withCORS(withLogging(srv.routes()))
 	if err := http.ListenAndServe(":"+port, mux); err != nil {

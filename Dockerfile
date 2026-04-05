@@ -58,8 +58,9 @@ RUN useradd -m -u 1000 user && \
     chown -R user:user /app && \
     chown -R user:user /var/run/supervisor /var/log/supervisor
 
-# 7860 = Env Server (main OpenEnv endpoint), 7861 = Dashboard
-EXPOSE 7860 7861
+# EXPOSE 7860 only - this is the main OpenEnv API endpoint (reverse proxy + /dashboard)
+# Port 7861 (dashboard) runs internally only and is accessed via /dashboard proxy
+EXPOSE 7860
 
 # Run supervisor as root to manage both services (required for multi-process supervision)
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf", "-n"]
