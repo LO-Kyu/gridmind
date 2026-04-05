@@ -1,3 +1,14 @@
+---
+title: GridMind-RL
+emoji: âš¡
+colorFrom: green
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+---
+
 # GridMind-RL
 
 **Industrial building energy management reinforcement learning environment**
@@ -34,11 +45,11 @@ GridMind-RL consists of three tightly integrated components:
 Agent (python/inference.py)
     ?? HTTP POST /step, /reset, /grade
     ?
-Go Environment Server (main.go) — Port 7860
+Go Environment Server (main.go) ï¿½ Port 7860
     ?
 Physics Engine (env/environment.go) + Rewards (env/rewards.go) + Tasks (env/tasks.go)
     ?
-Web Dashboard (dashboard/server.py) — Port 7861
+Web Dashboard (dashboard/server.py) ï¿½ Port 7861
 ```
 
 **Design philosophy:**
@@ -55,7 +66,7 @@ Web Dashboard (dashboard/server.py) — Port 7861
 
 | Field | Type | Range | Description |
 |-------|------|-------|-------------|
-| `indoor_temperature` | float | [15-27] °C | Building indoor temperature |
+| `indoor_temperature` | float | [15-27] ï¿½C | Building indoor temperature |
 | `thermal_storage_level` | float | [0-1] | Thermal storage charge (0=empty, 1=full) |
 | `process_demand` | float | [5-50] kW | Baseline demand |
 | `current_price` | float | [0.03-0.25] $/kWh | Electricity price |
@@ -82,7 +93,7 @@ Web Dashboard (dashboard/server.py) — Port 7861
 | Component | Description |
 |-----------|-------------|
 | **Cost Savings** | Negative cost per energy consumed |
-| **Temperature Constraint** | Penalty if T outside [19-23]°C |
+| **Temperature Constraint** | Penalty if T outside [19-23]ï¿½C |
 | **Grid Response** | Bonus for load shedding during stress |
 | **Deadline Penalty** | Penalty for missed batch deadlines |
 | **Efficiency Bonus** | Bonus for off-peak charging |
@@ -100,7 +111,7 @@ Web Dashboard (dashboard/server.py) — Port 7861
 | Task 3 | Hard | Full demand response + scheduling | **0.598** |
 
 **Task 1 (Easy)**: Cost minimization, no constraints  
-**Task 2 (Medium)**: Cost + temperature comfort (19-23°C)  
+**Task 2 (Medium)**: Cost + temperature comfort (19-23ï¿½C)  
 **Task 3 (Hard)**: Cost + comfort + grid response + batch scheduling + carbon
 
 ---
@@ -138,11 +149,11 @@ python inference.py --episodes 1
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HF_TOKEN` | Yes | — | LLM API key |
+| `HF_TOKEN` | Yes | ï¿½ | LLM API key |
 | `API_BASE_URL` | No | `https://openrouter.ai/api/v1` | LLM endpoint |
 | `MODEL_NAME` | No | `meta-llama/llama-3.3-70b-instruct:free` | Model ID |
 | `ENV_URL` | No | `http://localhost:7860` | Environment server URL |
-| `OPENAI_API_KEY` | No | — | Alternative to HF_TOKEN |
+| `OPENAI_API_KEY` | No | ï¿½ | Alternative to HF_TOKEN |
 
 ---
 
@@ -187,23 +198,23 @@ gridmind-rl/
 +-- openenv.yaml               # OpenEnv spec
 +-- Dockerfile                 # Container build
 +-- env/
-¦   +-- environment.go         # Physics simulation
-¦   +-- models.go              # Data models
-¦   +-- rewards.go             # Reward computation
-¦   +-- tasks.go               # Task grading
+ï¿½   +-- environment.go         # Physics simulation
+ï¿½   +-- models.go              # Data models
+ï¿½   +-- rewards.go             # Reward computation
+ï¿½   +-- tasks.go               # Task grading
 +-- python/
-¦   +-- inference.py           # LLM agent
-¦   +-- models.py              # Pydantic models
-¦   +-- requirements.txt
+ï¿½   +-- inference.py           # LLM agent
+ï¿½   +-- models.py              # Pydantic models
+ï¿½   +-- requirements.txt
 +-- dashboard/
-¦   +-- server.py              # Web server (port 7861)
-¦   +-- static/                # Frontend assets
+ï¿½   +-- server.py              # Web server (port 7861)
+ï¿½   +-- static/                # Frontend assets
 +-- data/
-¦   +-- price_curves.json      # Price data
-¦   +-- generate_prices.py     # Price generator
+ï¿½   +-- price_curves.json      # Price data
+ï¿½   +-- generate_prices.py     # Price generator
 +-- tests/
-¦   +-- test_graders.py        # Python tests
-¦   +-- environment_test.go    # Go tests
+ï¿½   +-- test_graders.py        # Python tests
+ï¿½   +-- environment_test.go    # Go tests
 +-- baseline_scores.json       # Reference scores
 +-- .env.example               # Environment template
 +-- LICENSE                    # MIT License
