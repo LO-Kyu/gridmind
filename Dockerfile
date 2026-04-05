@@ -32,9 +32,14 @@ COPY dashboard/ ./dashboard/
 COPY data/ ./data/
 COPY openenv.yaml ./
 
-# Configure Supervisor
-RUN echo "[supervisord]" > /etc/supervisor/conf.d/supervisord.conf && \
+# Configure Supervisor to use /tmp for socket and pid files (writable by any user)
+RUN echo "[unix_http_server]" > /etc/supervisor/conf.d/supervisord.conf && \
+    echo "file=/tmp/supervisor.sock" >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo "" >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo "[supervisord]" >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo "pidfile=/tmp/supervisord.pid" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "nodaemon=true" >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo "" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "[program:go-env]" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "command=/usr/local/bin/gridmind-server" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "environment=PORT=7860" >> /etc/supervisor/conf.d/supervisord.conf && \
@@ -42,6 +47,7 @@ RUN echo "[supervisord]" > /etc/supervisor/conf.d/supervisord.conf && \
     echo "stdout_logfile_maxbytes=0" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "stderr_logfile=/dev/stderr" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "stderr_logfile_maxbytes=0" >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo "" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "[program:dashboard]" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "command=python -m uvicorn dashboard.server:app --host 0.0.0.0 --port 7861" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "stdout_logfile=/dev/stdout" >> /etc/supervisor/conf.d/supervisord.conf && \
@@ -49,18 +55,13 @@ RUN echo "[supervisord]" > /etc/supervisor/conf.d/supervisord.conf && \
     echo "stderr_logfile=/dev/stderr" >> /etc/supervisor/conf.d/supervisord.conf && \
     echo "stderr_logfile_maxbytes=0" >> /etc/supervisor/conf.d/supervisord.conf
 
-# Create run directory for supervisor
-RUN mkdir -p /var/run/supervisor /var/log/supervisor && \
-    chmod 755 /var/run/supervisor /var/log/supervisor
-
-# Add a non-root user (good practice and required for some HF Spaces configs)
-RUN useradd -m -u 1000 user && \
-    chown -R user:user /app && \
-    chown -R user:user /var/run/supervisor /var/log/supervisor
-
 # EXPOSE 7860 only - this is the main OpenEnv API endpoint (reverse proxy + /dashboard)
 # Port 7861 (dashboard) runs internally only and is accessed via /dashboard proxy
 EXPOSE 7860
 
-# Run supervisor as root to manage both services (required for multi-process supervision)
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf", "-n"]
+# Add a non-root user (good practice and required for some HF Spaces configs)
+RUN useradd -m -u 1000 user && chown -R user:user /app
+
+# Run supervisord to manage both Go server and Python dashboard
+# Using /tmp for socket and pid files (writable by any user, including uid 1000)
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
