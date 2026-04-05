@@ -376,6 +376,8 @@ def run_episode(
     grade = env_client.grade()
     
     # Emit [END] with required fields
+    success = last_error is None and step_resp.get("done", False)
+    rewards_str = ",".join(f"{r:.2f}" for r in step_rewards)
     print(
         f"[END] success={'true' if success else 'false'} steps={total_steps} rewards={rewards_str}",
         flush=True
