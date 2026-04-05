@@ -197,7 +197,7 @@ POST /reset {task_id}  → start new episode
 POST /step {action}    → take action</pre>
 <h3>📚 Links</h3>
 <ul>
-  <li><a href="https://github.com/shreeshantkhade/GridMind-RL">GitHub Repository</a></li>
+  <li><a href="https://github.com/LO-Kyu/gridmind">GitHub Repository</a></li>
   <li><a href="https://openenv.org">OpenEnv Specification</a></li>
 </ul>
 </body>
