@@ -21,6 +21,21 @@ license: mit
 
 ---
 
+---
+
+## 🚀 Live Demo
+
+| | URL |
+|--|-----|
+| **Environment API** | https://lo-kyu-gridmind.hf.space |
+| **Live Dashboard** | https://lo-kyu-gridmind.hf.space/dashboard |
+
+**Quick test:**
+```bash
+curl https://lo-kyu-gridmind.hf.space/health
+curl https://lo-kyu-gridmind.hf.space/tasks
+```
+
 ## Overview
 
 GridMind-RL is a reinforcement learning environment for training and evaluating intelligent control policies in industrial building energy management. The environment simulates realistic HVAC control, thermal storage management, batch job scheduling, and demand response scenarios under stochastic electricity pricing and grid stress events.

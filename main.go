@@ -8,9 +8,13 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,8 +36,8 @@ type Metrics struct {
 	rewardMin        float64
 	rewardMax        float64
 	// Histograms
-	actionBuckets    map[string]int64 // hvac bucket counts
-	errorCount       int64
+	actionBuckets map[string]int64 // hvac bucket counts
+	errorCount    int64
 }
 
 var metrics = &Metrics{
@@ -134,6 +138,7 @@ func newServer() *Server {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/ping", s.handlePing)
 	mux.HandleFunc("/reset", s.handleReset)
@@ -143,7 +148,61 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/grade", s.handleGrade)
 	mux.HandleFunc("/tasks", s.handleTasks)
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	// Reverse proxy for dashboard (runs on port 7861 internally)
+	mux.HandleFunc("/dashboard", s.handleDashboardProxy)
+	mux.HandleFunc("/dashboard/", s.handleDashboardProxy)
 	return mux
+}
+
+// ── / (Root) ────────────────────────────────────────────────────────────────
+
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	html := `<!DOCTYPE html>
+<html>
+<head><title>GridMind-RL</title>
+<style>
+  body { font-family: monospace; background: #0d1117; color: #e6edf3; padding: 40px; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .badge { background: #238636; padding: 4px 10px; border-radius: 4px; color: white; display: inline-block; }
+  ul { line-height: 1.8; }
+  pre { background: #0d1117; border: 1px solid #30363d; padding: 16px; border-radius: 6px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>⚡ GridMind-RL</h1>
+<p><span class="badge">● RUNNING</span></p>
+<p>Industrial building energy management RL environment — OpenEnv compliant.</p>
+<h3>🔗 Quick Links</h3>
+<ul>
+  <li><a href="/dashboard">→ Live Dashboard</a></li>
+  <li><a href="/health">→ API Health Check</a></li>
+  <li><a href="/tasks">→ Available Tasks</a></li>
+  <li><a href="/metrics">→ Prometheus Metrics</a></li>
+</ul>
+<h3>📡 API Endpoints</h3>
+<pre>GET  /health           → health check
+GET  /ping             → ping pong
+GET  /state            → current environment state
+GET  /replay           → episode replay data
+GET  /grade            → episode grade score
+GET  /tasks            → list of tasks
+GET  /metrics          → prometheus metrics
+POST /reset {task_id}  → start new episode
+POST /step {action}    → take action</pre>
+<h3>📚 Links</h3>
+<ul>
+  <li><a href="https://github.com/LO-Kyu/gridmind">GitHub Repository</a></li>
+  <li><a href="https://openenv.org">OpenEnv Specification</a></li>
+</ul>
+</body>
+</html>`
+	w.Write([]byte(html))
 }
 
 // ── /health ──────────────────────────────────────────────────────────────────
@@ -333,6 +392,58 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, metrics.prometheus())
 }
 
+// ── /dashboard (Reverse Proxy) ────────────────────────────────────────────
+
+func (s *Server) handleDashboardProxy(w http.ResponseWriter, r *http.Request) {
+	// Target URL for the dashboard service (running on localhost:7861)
+	target, err := url.Parse("http://localhost:7861")
+	if err != nil {
+		http.Error(w, "proxy configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	// Create a custom director to modify the request
+	director := func(req *http.Request) {
+		// Strip /dashboard prefix
+		path := req.URL.Path
+		if strings.HasPrefix(path, "/dashboard") {
+			path = strings.TrimPrefix(path, "/dashboard")
+			if path == "" {
+				path = "/"
+			}
+		}
+
+		// Set up the new request
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		if target.Path != "" {
+			req.URL.Path = target.Path + path
+		} else {
+			req.URL.Path = path
+		}
+		req.RequestURI = ""
+
+		// Preserve original host header for dashboard API calls
+		if req.Header.Get("X-Forwarded-Host") == "" {
+			req.Header.Set("X-Forwarded-For", getClientIP(r))
+			req.Header.Set("X-Forwarded-Proto", "https")
+		}
+	}
+
+	// Use ReverseProxy with custom director
+	proxy := &httputil.ReverseProxy{Director: director}
+	proxy.ServeHTTP(w, r)
+}
+
+// Helper: extract client IP from request
+func getClientIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
 // ──────────────────────────────────────────────
 // Entry point
 // ──────────────────────────────────────────────
@@ -354,7 +465,7 @@ func main() {
 	srv.envMgr.Reset(env.ResetRequest{Seed: &seed, TaskID: 1, NumBuildings: 1})
 
 	log.Printf("GridMind-RL environment server starting on :%s", port)
-	log.Printf("Endpoints: GET /health /ping /state /replay /grade /tasks /metrics | POST /reset /step")
+	log.Printf("Endpoints: GET / (landing) | GET /health /ping /state /replay /grade /tasks /metrics /dashboard | POST /reset /step")
 
 	mux := withCORS(withLogging(srv.routes()))
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
