@@ -1,20 +1,63 @@
 # Secrets
 .env
+!.env.example
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 .pytest_cache/
 
 # Go
 *.exe
 gridmind-out.exe
+gridmind-test.exe
+gridmind-server
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Build and test artifacts
+build/
+dist/
+*.log
+*.orig
+test_output.json
+test_suite_results.json
+
+# Old architecture (removed)
+server/
+embed/
+gridmind_rl.egg-info/
+HACKATHON_COMPLIANCE_REPORT.md
+STRICT_QA_COMPLIANCE_REPORT.md
+qa_strict_tests.py
+qa_test_suite.py

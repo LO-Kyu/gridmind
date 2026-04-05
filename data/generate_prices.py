@@ -1,4 +1,9 @@
-"""Generate 30 days of realistic ISO New England-style hourly price data."""
+"""
+One-time script used to generate data/price_curves.json
+Generate 30 days of realistic ISO New England-style hourly price data.
+Run: python data/generate_prices.py
+Output: data/price_curves.json
+"""
 import json
 import math
 import random

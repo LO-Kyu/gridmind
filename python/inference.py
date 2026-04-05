@@ -48,10 +48,10 @@ ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/llama-3.3-70b-instruct:free")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1")
 
-# ── Hackathon Spec Compliance: HF_TOKEN → OpenAI API Key ──────────────────
-# Per hackathon spec, the LLM API credential is read from HF_TOKEN environment variable
+# ── Environment Variable Handling ─────────────────────────────────────────
+# The LLM API credential is read from HF_TOKEN or OPENAI_API_KEY environment variables
 # and passed directly to the OpenAI client for initialization.
-# Primary: HF_TOKEN (hackathon spec requirement)
+# Primary: HF_TOKEN
 # Fallback: OPENAI_API_KEY (for local testing/development)
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or HF_TOKEN

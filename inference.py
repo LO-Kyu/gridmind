@@ -1,13 +1,15 @@
 """
-Hackathon entrypoint: run from repo root with:
+GridMind-RL Agent Entry Point
+
+Run from repo root with:
   python inference.py
 
 Reads environment variables:
   - API_BASE_URL (default: https://openrouter.ai/api/v1)
   - MODEL_NAME (default: meta-llama/llama-3.3-70b-instruct:free)
-  - HF_TOKEN (mandatory, no default)
+  - HF_TOKEN (required, or OPENAI_API_KEY for testing)
 
-Emits hackathon-compliant stdout format:
+Emits standard output format:
   [START] task=<name> env=gridmind model=<model>
   [STEP] step=<n> action=<json> reward=<0.00> done=<true|false> error=<msg|null>
   [END] success=<true|false> steps=<n> rewards=<r1,r2,...>
