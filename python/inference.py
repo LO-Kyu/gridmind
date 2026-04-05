@@ -45,8 +45,8 @@ except ImportError:
 # ── Constants ──────────────────────────────────────────────────────────────
 
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
-MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/llama-3.3-70b-instruct:free")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "<your-active-model>")
+API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
 
 # ── Environment Variable Handling ─────────────────────────────────────────
 # The LLM API credential is read from HF_TOKEN or OPENAI_API_KEY environment variables
