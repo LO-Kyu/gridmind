@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y supervisor && rm -rf /var/lib/apt/lists
 # Install Python dependencies
 COPY python/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt || \
-    pip install --no-cache-dir openai fastapi uvicorn httpx pydantic "pydantic>=2.0.0" requests
+    pip install --no-cache-dir openai httpx pydantic "pydantic>=2.0.0" requests
 
 # Copy Go binary
 COPY --from=builder /app/gridmind-server /usr/local/bin/gridmind-server
