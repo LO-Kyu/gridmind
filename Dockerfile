@@ -29,6 +29,7 @@ COPY --from=builder /app/gridmind-server /usr/local/bin/gridmind-server
 COPY python/ ./python/
 COPY inference.py ./inference.py
 COPY dashboard/ ./dashboard/
+COPY server/ ./server/
 COPY data/ ./data/
 COPY openenv.yaml ./
 
