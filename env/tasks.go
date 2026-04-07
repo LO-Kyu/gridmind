@@ -97,7 +97,13 @@ func GradeEpisode(inp GradeEpisodeInput) EpisodeGrade {
 		grade.Score = math.Max(0, grade.Score-grade.PenaltyApplied)
 	}
 
+	// Clamp AFTER rounding to ensure boundary values are handled
 	grade.Score = clampOpenInterval(math.Round(grade.Score*10000) / 10000) // 4 decimal places
+
+	// Also ensure all sub-scores are properly clamped after rounding
+	for key, val := range grade.SubScores {
+		grade.SubScores[key] = clampOpenInterval(math.Round(val*10000) / 10000)
+	}
 	return grade
 }
 
@@ -119,7 +125,9 @@ func gradeTask1(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 		costScore = math.Max(0, 1.0-ratio)
 	}
 
-	grade.SubScores["cost"] = clampOpenInterval(math.Min(1.0, costScore))
+	// Clamp after min operation
+	clamped := clampOpenInterval(math.Min(1.0, costScore))
+	grade.SubScores["cost"] = clampOpenInterval(math.Round(clamped*10000) / 10000)
 	grade.Score = grade.SubScores["cost"]
 	grade.Details["agent_cost"] = agentCost
 	grade.Details["baseline_cost"] = baselineCost
@@ -151,9 +159,11 @@ func gradeTask2(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 		constraintScore = float64(withinBounds) / float64(totalSteps)
 	}
 
-	grade.SubScores["cost"] = costScore
-	grade.SubScores["temperature"] = clampOpenInterval(constraintScore)
-	grade.Score = clampOpenInterval(costScore*0.6 + constraintScore*0.4)
+	// Clamp sub-scores and final score after rounding
+	grade.SubScores["cost"] = clampOpenInterval(math.Round(costScore*10000) / 10000)
+	grade.SubScores["temperature"] = clampOpenInterval(math.Round(constraintScore*10000) / 10000)
+	finalScore := costScore*0.6 + constraintScore*0.4
+	grade.Score = clampOpenInterval(math.Round(finalScore*10000) / 10000)
 	grade.Details["within_bounds_steps"] = withinBounds
 	grade.Details["total_steps"] = totalSteps
 	return grade
@@ -212,13 +222,15 @@ func gradeTask3(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 		carbonScore = math.Max(0, 1.0-agentCarbon/baselineCarbon)
 	}
 
-	grade.SubScores["cost"] = costScore
-	grade.SubScores["temperature"] = tempScore
-	grade.SubScores["grid_response"] = clampOpenInterval(gridScore)
-	grade.SubScores["batch_deadline"] = clampOpenInterval(batchScore)
-	grade.SubScores["carbon"] = clampOpenInterval(math.Min(1.0, carbonScore))
+	// Clamp all sub-scores after rounding
+	grade.SubScores["cost"] = clampOpenInterval(math.Round(costScore*10000) / 10000)
+	grade.SubScores["temperature"] = clampOpenInterval(math.Round(tempScore*10000) / 10000)
+	grade.SubScores["grid_response"] = clampOpenInterval(math.Round(gridScore*10000) / 10000)
+	grade.SubScores["batch_deadline"] = clampOpenInterval(math.Round(batchScore*10000) / 10000)
+	grade.SubScores["carbon"] = clampOpenInterval(math.Round(math.Min(1.0, carbonScore)*10000) / 10000)
 
-	grade.Score = clampOpenInterval(costScore*0.28 + tempScore*0.20 + gridScore*0.20 + batchScore*0.12 + carbonScore*0.20)
+	finalScore := costScore*0.28 + tempScore*0.20 + gridScore*0.20 + batchScore*0.12 + carbonScore*0.20
+	grade.Score = clampOpenInterval(math.Round(finalScore*10000) / 10000)
 
 	grade.Details["grid_stress_steps"] = gridStressSteps
 	grade.Details["grid_response_steps"] = gridResponseSteps
