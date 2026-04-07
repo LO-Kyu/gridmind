@@ -10,7 +10,7 @@ COPY env/ ./env/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-s -w" -o gridmind-server main.go
 
 # Stage 2: Final image with Python runtime and Dashboard
-FROM python:3.11-slim
+FROM mirror.gcr.io/library/python:3.11-slim
 
 WORKDIR /app
 
