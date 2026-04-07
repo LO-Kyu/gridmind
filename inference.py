@@ -170,7 +170,7 @@ class LLMAgent:
         # The OPENAI_API_KEY variable contains the HF_TOKEN value passed by evaluators
         self.client = OpenAI(
             base_url=API_BASE_URL,
-            api_key=OPENAI_API_KEY,
+            api_key=OPENAI_API_KEY or "dummy-key-for-fast-mode",
         )
         self.model = MODEL_NAME
         self.fallback_mode = False
@@ -324,7 +324,8 @@ def run_episode(
             "sub_scores": {},
             "exploit_detected": False,
         }
-    obs = reset_resp.get("observations", [{}])[0]
+    obs_list = reset_resp.get("observations", [{}])
+    obs = obs_list[0] if obs_list else {}
     
     task_name = f"gridmind-task-{task_id}"
     
