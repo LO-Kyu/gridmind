@@ -28,9 +28,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, Optional
 
 import requests
 from openai import OpenAI
@@ -427,6 +428,97 @@ def run_episode(
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def start_environment_server(port: int = 7860) -> Optional[subprocess.Popen]:
+    """Start the GridMind-RL environment server as a background process.
+    
+    Returns:
+        A Popen object if the server was started, or None if it's already running.
+    """
+    # First check if server is already running
+    try:
+        r = requests.get(f"http://localhost:{port}/health", timeout=2)
+        if r.status_code == 200:
+            print(f"[INFO] Environment server already running on port {port}", file=sys.stderr)
+            return None
+    except Exception:
+        pass  # Server not running, we'll start it
+    
+    print(f"[INFO] Starting environment server on port {port}...", file=sys.stderr)
+    
+    # Try to find and run the server
+    try:
+        # Prepare environment
+        env = os.environ.copy()
+        env["PORT"] = str(port)
+        if "PYTHONPATH" in env:
+            env["PYTHONPATH"] = "." + os.pathsep + env["PYTHONPATH"]
+        else:
+            env["PYTHONPATH"] = "."
+        
+        # Look for compiled Go binary first
+        binary_paths = [
+            "/usr/local/bin/gridmind-server",  # Docker path
+            "./gridmind-server",               # Local Linux/Mac
+            "./gridmind-server.exe",           # Local Windows
+        ]
+        
+        for binary_path in binary_paths:
+            if os.path.exists(binary_path):
+                try:
+                    print(f"[INFO] Running Go binary: {binary_path}", file=sys.stderr)
+                    proc = subprocess.Popen(
+                        [binary_path],
+                        env=env,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    time.sleep(2)
+                    if proc.poll() is None:
+                        return proc
+                except Exception as e:
+                    print(f"[DEBUG] Failed with {binary_path}: {e}", file=sys.stderr)
+        
+        # Try to compile Go binary if 'go' is available
+        try:
+            print(f"[INFO] Attempting to compile Go executable...", file=sys.stderr)
+            compile_cmd = ["go", "build", "-o", "gridmind-server", "main.go"]
+            result = subprocess.run(
+                compile_cmd,
+                capture_output=True,
+                timeout=60,
+                cwd=".",
+            )
+            if result.returncode == 0:
+                print(f"[INFO] Compilation successful, starting server...", file=sys.stderr)
+                proc = subprocess.Popen(
+                    ["./gridmind-server"],
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                time.sleep(2)
+                if proc.poll() is None:
+                    return proc
+        except Exception as e:
+            print(f"[DEBUG] Could not compile: {e}", file=sys.stderr)
+        
+        # Fallback: try to run via Python server module
+        print(f"[INFO] Attempting Python server module...", file=sys.stderr)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "server.app"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=".",
+        )
+        time.sleep(3)
+        if proc.poll() is None:
+            return proc
+        
+    except Exception as e:
+        print(f"[WARNING] Could not start environment server: {e}", file=sys.stderr)
+        return None
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="GridMind-RL baseline inference")
@@ -459,58 +551,74 @@ def main() -> None:
         print("HF_TOKEN is required.", file=sys.stderr)
         sys.exit(1)
 
-    env_client = GridMindEnvClient(base_url=args.env_url)
+    # Start the environment server if not already running
+    server_proc = start_environment_server(port=7860)
+    
+    try:
+        env_client = GridMindEnvClient(base_url=args.env_url)
 
-    for attempt in range(30):
-        if env_client.health():
-            break
-        time.sleep(2)
-        if attempt == 29:
-            print("Environment server not reachable.", file=sys.stderr)
-            sys.exit(1)
+        for attempt in range(30):
+            if env_client.health():
+                break
+            time.sleep(2)
+            if attempt == 29:
+                print("Environment server not reachable.", file=sys.stderr)
+                sys.exit(1)
 
-    agent = LLMAgent()
-    all_results: list[dict[str, Any]] = []
+        agent = LLMAgent()
+        all_results: list[dict[str, Any]] = []
 
-    for task_id in [1, 2, 3]:
-        task_scores: list[float] = []
-        for ep in range(args.episodes):
-            seed = DEFAULT_SEED_BASE + task_id * 100 + ep
-            result = run_episode(
-                env_client,
-                agent,
-                task_id=task_id,
-                seed=seed,
-                fast_mode=args.fast_mode,
-                llm_every=args.llm_every,
-                max_steps=args.max_steps,
-                verbose=args.verbose,
-            )
-            task_scores.append(float(result["score"]))
-            all_results.append(result)
-        _ = sum(task_scores) / len(task_scores)
+        for task_id in [1, 2, 3]:
+            task_scores: list[float] = []
+            for ep in range(args.episodes):
+                seed = DEFAULT_SEED_BASE + task_id * 100 + ep
+                result = run_episode(
+                    env_client,
+                    agent,
+                    task_id=task_id,
+                    seed=seed,
+                    fast_mode=args.fast_mode,
+                    llm_every=args.llm_every,
+                    max_steps=args.max_steps,
+                    verbose=args.verbose,
+                )
+                task_scores.append(float(result["score"]))
+                all_results.append(result)
+            _ = sum(task_scores) / len(task_scores)
 
-    task_avgs: dict[int, float] = {}
-    for task_id in [1, 2, 3]:
-        scores = [float(r["score"]) for r in all_results if r["task_id"] == task_id]
-        avg = sum(scores) / len(scores) if scores else 0.0
-        task_avgs[task_id] = avg
-    overall = sum(task_avgs.values()) / len(task_avgs)
+        task_avgs: dict[int, float] = {}
+        for task_id in [1, 2, 3]:
+            scores = [float(r["score"]) for r in all_results if r["task_id"] == task_id]
+            avg = sum(scores) / len(scores) if scores else 0.0
+            task_avgs[task_id] = avg
+        overall = sum(task_avgs.values()) / len(task_avgs)
 
-    output = {
-        "model": MODEL_NAME,
-        "api_base": API_BASE_URL,
-        "episodes_per_task": args.episodes,
-        "seed_base": DEFAULT_SEED_BASE,
-        "fast_mode": args.fast_mode,
-        "llm_every": args.llm_every,
-        "max_steps": args.max_steps,
-        "task_averages": {str(k): v for k, v in task_avgs.items()},
-        "overall_average": overall,
-        "all_results": all_results,
-    }
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2)
+        output = {
+            "model": MODEL_NAME,
+            "api_base": API_BASE_URL,
+            "episodes_per_task": args.episodes,
+            "seed_base": DEFAULT_SEED_BASE,
+            "fast_mode": args.fast_mode,
+            "llm_every": args.llm_every,
+            "max_steps": args.max_steps,
+            "task_averages": {str(k): v for k, v in task_avgs.items()},
+            "overall_average": overall,
+            "all_results": all_results,
+        }
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(output, f, indent=2)
+    finally:
+        # Clean up the server process if we started it
+        if server_proc:
+            try:
+                server_proc.terminate()
+                server_proc.wait(timeout=5)
+            except Exception as e:
+                print(f"[WARNING] Failed to terminate server: {e}", file=sys.stderr)
+                try:
+                    server_proc.kill()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
