@@ -56,7 +56,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or HF_TOKEN
 if not OPENAI_API_KEY:
-    raise ValueError("HF_TOKEN or OPENAI_API_KEY environment variable is required")
+    print("[WARN] No HF_TOKEN or OPENAI_API_KEY set - will use heuristic mode if --fast-mode is set")
 DEFAULT_EPISODES = 1
 DEFAULT_SEED_BASE = 1000
 MAX_RETRIES = 3
@@ -121,26 +121,42 @@ class GridMindEnvClient:
         except Exception:
             return False
 
-    def reset(self, task_id: int = 1, seed: int = 42, num_buildings: int = 1) -> dict:
-        payload = {"task_id": task_id, "seed": seed, "num_buildings": num_buildings}
-        r = requests.post(f"{self.base}/reset", json=payload, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+    def reset(self, task_id: int = 1, seed: int = 42, num_buildings: int = 1) -> dict | None:
+        try:
+            payload = {"task_id": task_id, "seed": seed, "num_buildings": num_buildings}
+            r = requests.post(f"{self.base}/reset", json=payload, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to reset environment: {e}", file=sys.stderr)
+            return None
 
-    def step(self, action: dict) -> dict:
-        r = requests.post(f"{self.base}/step", json=action, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+    def step(self, action: dict) -> dict | None:
+        try:
+            r = requests.post(f"{self.base}/step", json=action, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to step environment: {e}", file=sys.stderr)
+            return None
 
     def grade(self) -> dict:
-        r = requests.get(f"{self.base}/grade", timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        try:
+            r = requests.get(f"{self.base}/grade", timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to grade: {e}", file=sys.stderr)
+            return {"score": 0.0, "sub_scores": {}, "exploit_detected": False}
 
-    def state(self) -> dict:
-        r = requests.get(f"{self.base}/state", timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+    def state(self) -> dict | None:
+        try:
+            r = requests.get(f"{self.base}/state", timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to get state: {e}", file=sys.stderr)
+            return None
 
 
 # ── LLM agent ───────────────────────────────────────────────────────────────
@@ -296,7 +312,19 @@ def run_episode(
       [END] success=<true|false> steps=<n> rewards=<r1,r2,...>
     """
     reset_resp = env_client.reset(task_id=task_id, seed=seed)
-    obs = reset_resp["observations"][0]
+    if reset_resp is None:
+        print(f"[END] success=false steps=0 rewards=", flush=True)
+        return {
+            "task_id": task_id,
+            "seed": seed,
+            "total_reward": 0.0,
+            "total_steps": 0,
+            "elapsed_sec": 0.0,
+            "score": 0.0,
+            "sub_scores": {},
+            "exploit_detected": False,
+        }
+    obs = reset_resp.get("observations", [{}])[0]
     
     task_name = f"gridmind-task-{task_id}"
     
@@ -329,8 +357,13 @@ def run_episode(
                 action = cached_action
             
             step_resp = env_client.step(action)
-            if step_resp is None or "observation" not in step_resp:
-                last_error = "invalid step response"
+            if step_resp is None or not isinstance(step_resp, dict) or "observation" not in step_resp:
+                last_error = "invalid step response from environment"
+                print(
+                    f"[STEP] step={total_steps + 1} action=null "
+                    f"reward=0.00 done=true error=\"{last_error}\"",
+                    flush=True
+                )
                 break
             
             if not fast_mode:
@@ -424,6 +457,11 @@ def main() -> None:
         help="Stop after N steps (default: full episode). Grade uses partial episode.",
     )
     args = parser.parse_args()
+    
+    # Validate API key AFTER argparse (allows --fast-mode to bypass)
+    if not OPENAI_API_KEY and not args.fast_mode:
+        print("[WARN] No API key set, switching to fast-mode (heuristic)", file=sys.stderr)
+        args.fast_mode = True
 
     print("=" * 60)
     print("GridMind-RL Baseline Inference")
@@ -510,4 +548,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"[FATAL] Unhandled exception: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
