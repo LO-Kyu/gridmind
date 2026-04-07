@@ -45,8 +45,8 @@ except ImportError:
 # ── Constants ──────────────────────────────────────────────────────────────
 
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
-MODEL_NAME = os.getenv("MODEL_NAME", "<your-active-model>")
-API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
 
 # ── Environment Variable Handling ─────────────────────────────────────────
 # The LLM API credential is read from HF_TOKEN or OPENAI_API_KEY environment variables
@@ -54,9 +54,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
 # Primary: HF_TOKEN
 # Fallback: OPENAI_API_KEY (for local testing/development)
 HF_TOKEN = os.getenv("HF_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or HF_TOKEN
-if not OPENAI_API_KEY:
-    print("[WARN] No HF_TOKEN or OPENAI_API_KEY set - will use heuristic mode if --fast-mode is set")
+OPENAI_API_KEY = HF_TOKEN
 DEFAULT_EPISODES = 1
 DEFAULT_SEED_BASE = 1000
 MAX_RETRIES = 3
@@ -158,6 +156,10 @@ class GridMindEnvClient:
             print(f"[ERROR] Failed to get state: {e}", file=sys.stderr)
             return None
 
+    def close(self) -> None:
+        """Compatibility close hook for episode-finalization contract."""
+        return None
+
 
 # ── LLM agent ───────────────────────────────────────────────────────────────
 
@@ -168,10 +170,7 @@ class LLMAgent:
     def __init__(self):
         # Initialize OpenAI client with credentials from HF_TOKEN (per hackathon spec)
         # The OPENAI_API_KEY variable contains the HF_TOKEN value passed by evaluators
-        self.client = OpenAI(
-            base_url=API_BASE_URL,
-            api_key=OPENAI_API_KEY or "dummy-key-for-fast-mode",
-        )
+        self.client = OpenAI(base_url=API_BASE_URL, api_key=OPENAI_API_KEY)
         self.model = MODEL_NAME
         self.fallback_mode = False
 
@@ -223,9 +222,12 @@ Respond with ONLY a JSON action:
                 return self._clamp_action(action)
             except Exception as e:
                 err_str = str(e)
-                print(f"  [LLM attempt {attempt+1}/{MAX_RETRIES}] error: {err_str}")
+                print(f"  [LLM attempt {attempt+1}/{MAX_RETRIES}] error: {err_str}", file=sys.stderr)
                 if "402" in err_str or "depleted" in err_str:
-                    print("  [WARN] Hugging Face free credits depleted! Switching to local heuristic agent for the rest of the simulation.")
+                    print(
+                        "  [WARN] Hugging Face free credits depleted! Switching to local heuristic agent for the rest of the simulation.",
+                        file=sys.stderr,
+                    )
                     self.fallback_mode = True
                     return self._heuristic_action(obs)
                 time.sleep(1)
@@ -311,44 +313,33 @@ def run_episode(
       ...
       [END] success=<true|false> steps=<n> rewards=<r1,r2,...>
     """
-    reset_resp = env_client.reset(task_id=task_id, seed=seed)
-    if reset_resp is None:
-        print(f"[END] success=false steps=0 rewards=", flush=True)
-        return {
-            "task_id": task_id,
-            "seed": seed,
-            "total_reward": 0.0,
-            "total_steps": 0,
-            "elapsed_sec": 0.0,
-            "score": 0.0,
-            "sub_scores": {},
-            "exploit_detected": False,
-        }
-    obs_list = reset_resp.get("observations", [{}])
-    obs = obs_list[0] if obs_list else {}
-    
     task_name = f"gridmind-task-{task_id}"
-    
-    # Emit [START] with required fields
     print(f"[START] task={task_name} env=gridmind model={MODEL_NAME}", flush=True)
-    
+
     total_reward = 0.0
     total_steps = 0
     start_time = time.time()
-    step_resp: dict[str, Any] = {}
+    step_resp: dict[str, Any] = {"done": False}
     step_limit = EPISODE_STEPS if max_steps is None else min(max_steps, EPISODE_STEPS)
-    
+
     llm_reuse_remaining = 0
     cached_action = agent._default_action()
-    
+
     step_rewards: list[float] = []
-    last_error: str | None = None
-    
-    while not step_resp.get("done", False):
-        if total_steps >= step_limit:
-            break
-        
-        try:
+    success = False
+    obs: dict[str, Any] = {}
+
+    try:
+        reset_resp = env_client.reset(task_id=task_id, seed=seed)
+        if reset_resp is None:
+            raise RuntimeError("reset failed")
+        obs_list = reset_resp.get("observations", [{}])
+        obs = obs_list[0] if obs_list else {}
+
+        while not step_resp.get("done", False):
+            if total_steps >= step_limit:
+                break
+
             if fast_mode:
                 action = agent._heuristic_action(obs)
             else:
@@ -359,35 +350,32 @@ def run_episode(
             
             step_resp = env_client.step(action)
             if step_resp is None or not isinstance(step_resp, dict) or "observation" not in step_resp:
-                last_error = "invalid step response from environment"
                 print(
                     f"[STEP] step={total_steps + 1} action=null "
-                    f"reward=0.00 done=true error=\"{last_error}\"",
+                    f"reward=0.00 done=true error=invalid step response from environment",
                     flush=True
                 )
                 break
-            
+
             if not fast_mode:
                 llm_reuse_remaining -= 1
-            
+
             obs = step_resp["observation"]
             reward = float(step_resp["reward"])
             total_reward += reward
             step_rewards.append(reward)
             total_steps += 1
             done = bool(step_resp.get("done", False))
-            
-            # Emit [STEP] with required fields (action as compact JSON, reward to 2 decimals)
+
             action_json = json.dumps(action, separators=(',', ':'))
-            error_field = "null" if last_error is None else f'"{last_error}"'
+            last_action_error = step_resp.get("last_action_error")
+            error_field = "null" if last_action_error is None else str(last_action_error)
             print(
                 f"[STEP] step={total_steps} action={action_json} "
                 f"reward={reward:.2f} done={'true' if done else 'false'} error={error_field}",
                 flush=True
             )
-            
-            last_error = None  # Clear error after successful step
-            
+
             if verbose and total_steps % 16 == 0:
                 print(
                     f"    step={total_steps:02d} price=${obs['current_price']:.3f} "
@@ -395,22 +383,30 @@ def run_episode(
                     f"stress={obs['grid_stress_signal']:.2f} "
                     f"cost=${obs['cumulative_cost']:.2f}",
                     flush=True,
+                    file=sys.stderr,
                 )
-        
-        except Exception as e:
-            last_error = str(e)
+
+        success = bool(step_resp.get("done", False))
+    except Exception as e:
+        err = str(e)
+        if not err:
+            err = "unknown error"
+        if "\n" in err:
+            err = err.replace("\n", " ")
+        if "\r" in err:
+            err = err.replace("\r", " ")
+        if total_steps < step_limit:
             print(
                 f"[STEP] step={total_steps + 1} action=null "
-                f"reward=0.00 done=true error=\"{last_error}\"",
+                f"reward=0.00 done=true error={err}",
                 flush=True
             )
-            break
-    
+    finally:
+        env_client.close()
+
     elapsed = time.time() - start_time
     grade = env_client.grade()
-    
-    # Emit [END] with required fields
-    success = last_error is None and step_resp.get("done", False)
+
     rewards_str = ",".join(f"{r:.2f}" for r in step_rewards)
     print(
         f"[END] success={'true' if success else 'false'} steps={total_steps} rewards={rewards_str}",
@@ -459,41 +455,27 @@ def main() -> None:
     )
     args = parser.parse_args()
     
-    # Validate API key AFTER argparse (allows --fast-mode to bypass)
-    if not OPENAI_API_KEY and not args.fast_mode:
-        print("[WARN] No API key set, switching to fast-mode (heuristic)", file=sys.stderr)
-        args.fast_mode = True
-
-    print("=" * 60)
-    print("GridMind-RL Baseline Inference")
-    print(f"  Model: {MODEL_NAME}")
-    print(f"  API:   {API_BASE_URL}")
-    print(f"  Env:   {args.env_url}")
-    print(f"  Episodes per task: {args.episodes}")
-    print(f"  Fast mode: {args.fast_mode} | LLM every: {args.llm_every} steps")
-    print("=" * 60)
+    if not HF_TOKEN:
+        print("HF_TOKEN is required.", file=sys.stderr)
+        sys.exit(1)
 
     env_client = GridMindEnvClient(base_url=args.env_url)
 
-    print("\nWaiting for environment server...")
     for attempt in range(30):
         if env_client.health():
-            print("  [OK] Environment server is healthy")
             break
         time.sleep(2)
         if attempt == 29:
-            print("  [FAIL] Environment server not reachable. Exiting.")
+            print("Environment server not reachable.", file=sys.stderr)
             sys.exit(1)
 
     agent = LLMAgent()
     all_results: list[dict[str, Any]] = []
 
     for task_id in [1, 2, 3]:
-        print(f"\n-- Task {task_id}: {TASK_DESCRIPTIONS[task_id][:60]}...")
         task_scores: list[float] = []
         for ep in range(args.episodes):
             seed = DEFAULT_SEED_BASE + task_id * 100 + ep
-            print(f"  Episode {ep+1}/{args.episodes} (seed={seed})")
             result = run_episode(
                 env_client,
                 agent,
@@ -506,30 +488,14 @@ def main() -> None:
             )
             task_scores.append(float(result["score"]))
             all_results.append(result)
-            print(
-                f"    → score={result['score']:.4f} | reward={result['total_reward']:.3f} | "
-                f"{result['elapsed_sec']:.1f}s | steps={result['total_steps']}"
-            )
-
-        avg_score = sum(task_scores) / len(task_scores)
-        print(f"  Task {task_id} average score: {avg_score:.4f}")
-
-    print("\n" + "=" * 60)
-    print("BASELINE SCORES SUMMARY")
-    print("=" * 60)
-    print(f"{'Task':<10} {'Model':<30} {'Score':<10} {'Episodes':<10}")
-    print("-" * 60)
+        _ = sum(task_scores) / len(task_scores)
 
     task_avgs: dict[int, float] = {}
     for task_id in [1, 2, 3]:
         scores = [float(r["score"]) for r in all_results if r["task_id"] == task_id]
         avg = sum(scores) / len(scores) if scores else 0.0
         task_avgs[task_id] = avg
-        print(f"Task {task_id:<6} {MODEL_NAME:<30} {avg:<10.4f} {len(scores)}")
-
-    print("-" * 60)
     overall = sum(task_avgs.values()) / len(task_avgs)
-    print(f"{'Overall':<10} {'':<30} {overall:<10.4f}")
 
     output = {
         "model": MODEL_NAME,
@@ -545,7 +511,6 @@ def main() -> None:
     }
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
-    print(f"\n[OK] Results saved to {args.output}")
 
 
 if __name__ == "__main__":
