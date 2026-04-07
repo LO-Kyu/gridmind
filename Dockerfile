@@ -1,13 +1,13 @@
 # Stage 1: Build the Go environment server
-FROM golang:1.21-alpine AS builder
+FROM golang:1.21 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum* ./
-RUN go mod download 2>/dev/null || true && go mod verify 2>/dev/null || true
+RUN go mod download || true
 
 COPY main.go ./
 COPY env/ ./env/
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o gridmind-server main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-s -w" -o gridmind-server main.go
 
 # Stage 2: Final image with Python runtime and Dashboard
 FROM python:3.11-slim
