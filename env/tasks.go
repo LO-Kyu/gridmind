@@ -3,12 +3,25 @@ package env
 
 import "math"
 
+// clampOpenInterval clamps a score to the open interval (0, 1), strictly excluding 0.0 and 1.0.
+// This ensures all scores satisfy the requirement: 0 < score < 1
+func clampOpenInterval(score float64) float64 {
+	const epsilon = 1e-6
+	if score <= 0.0 {
+		return epsilon
+	}
+	if score >= 1.0 {
+		return 1.0 - epsilon
+	}
+	return score
+}
+
 // TaskConfig describes a single task.
 type TaskConfig struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Difficulty  string `json:"difficulty"`
+	ID          int                `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Difficulty  string             `json:"difficulty"`
 	Weights     map[string]float64 `json:"weights"`
 }
 
@@ -41,12 +54,12 @@ func AllTasks() []TaskConfig {
 
 // GradeEpisodeInput collects all data needed to score a completed episode.
 type GradeEpisodeInput struct {
-	TaskID       int
-	Buildings    []*BuildingState
-	Replay       []ReplayEntry
-	TempHistory  [][]float64 // per building, per step
-	TMin         float64
-	TMax         float64
+	TaskID           int
+	Buildings        []*BuildingState
+	Replay           []ReplayEntry
+	TempHistory      [][]float64 // per building, per step
+	TMin             float64
+	TMax             float64
 	ExploitPenalties []float64
 }
 
@@ -84,7 +97,7 @@ func GradeEpisode(inp GradeEpisodeInput) EpisodeGrade {
 		grade.Score = math.Max(0, grade.Score-grade.PenaltyApplied)
 	}
 
-	grade.Score = math.Round(grade.Score*10000) / 10000 // 4 decimal places
+	grade.Score = clampOpenInterval(math.Round(grade.Score*10000) / 10000) // 4 decimal places
 	return grade
 }
 
@@ -106,7 +119,7 @@ func gradeTask1(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 		costScore = math.Max(0, 1.0-ratio)
 	}
 
-	grade.SubScores["cost"] = math.Min(1.0, costScore)
+	grade.SubScores["cost"] = clampOpenInterval(math.Min(1.0, costScore))
 	grade.Score = grade.SubScores["cost"]
 	grade.Details["agent_cost"] = agentCost
 	grade.Details["baseline_cost"] = baselineCost
@@ -139,8 +152,8 @@ func gradeTask2(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 	}
 
 	grade.SubScores["cost"] = costScore
-	grade.SubScores["temperature"] = constraintScore
-	grade.Score = costScore*0.6 + constraintScore*0.4
+	grade.SubScores["temperature"] = clampOpenInterval(constraintScore)
+	grade.Score = clampOpenInterval(costScore*0.6 + constraintScore*0.4)
 	grade.Details["within_bounds_steps"] = withinBounds
 	grade.Details["total_steps"] = totalSteps
 	return grade
@@ -201,11 +214,11 @@ func gradeTask3(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 
 	grade.SubScores["cost"] = costScore
 	grade.SubScores["temperature"] = tempScore
-	grade.SubScores["grid_response"] = gridScore
-	grade.SubScores["batch_deadline"] = batchScore
-	grade.SubScores["carbon"] = math.Min(1.0, carbonScore)
+	grade.SubScores["grid_response"] = clampOpenInterval(gridScore)
+	grade.SubScores["batch_deadline"] = clampOpenInterval(batchScore)
+	grade.SubScores["carbon"] = clampOpenInterval(math.Min(1.0, carbonScore))
 
-	grade.Score = costScore*0.28 + tempScore*0.20 + gridScore*0.20 + batchScore*0.12 + carbonScore*0.20
+	grade.Score = clampOpenInterval(costScore*0.28 + tempScore*0.20 + gridScore*0.20 + batchScore*0.12 + carbonScore*0.20)
 
 	grade.Details["grid_stress_steps"] = gridStressSteps
 	grade.Details["grid_response_steps"] = gridResponseSteps
