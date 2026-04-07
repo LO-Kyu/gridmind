@@ -62,6 +62,7 @@ MAX_RETRIES = 3
 # 96 steps × 15 min = 24 h (must match env.EpisodeSteps)
 EPISODE_STEPS = 96
 LAST_STEP_INDEX = EPISODE_STEPS - 1
+SCORE_EPSILON = 1e-6
 
 SYSPROMPT = """You are GridMind, an expert industrial energy management controller.
 You control a building's HVAC, thermal storage, batch job scheduling, and load shedding.
@@ -101,6 +102,15 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
                 except json.JSONDecodeError:
                     return None
     return None
+
+
+def clamp_open_score(score: float) -> float:
+    """Clamp score into strict open interval (0, 1)."""
+    if score <= 0.0:
+        return SCORE_EPSILON
+    if score >= 1.0:
+        return 1.0 - SCORE_EPSILON
+    return score
 
 
 # ── Environment client ───────────────────────────────────────────────────────
@@ -146,7 +156,7 @@ class GridMindEnvClient:
             return r.json()
         except Exception as e:
             print(f"[ERROR] Failed to grade: {e}", file=sys.stderr)
-            return {"score": 0.0, "sub_scores": {}, "exploit_detected": False}
+            return {"score": SCORE_EPSILON, "sub_scores": {}, "exploit_detected": False}
 
     def state(self) -> dict | None:
         try:
@@ -420,7 +430,7 @@ def run_episode(
         "total_reward": total_reward,
         "total_steps": total_steps,
         "elapsed_sec": elapsed,
-        "score": grade.get("score", 0.0),
+        "score": clamp_open_score(float(grade.get("score", SCORE_EPSILON))),
         "sub_scores": grade.get("sub_scores", {}),
         "exploit_detected": grade.get("exploit_detected", False),
     }
@@ -589,9 +599,9 @@ def main() -> None:
         task_avgs: dict[int, float] = {}
         for task_id in [1, 2, 3]:
             scores = [float(r["score"]) for r in all_results if r["task_id"] == task_id]
-            avg = sum(scores) / len(scores) if scores else 0.0
+            avg = clamp_open_score(sum(scores) / len(scores)) if scores else SCORE_EPSILON
             task_avgs[task_id] = avg
-        overall = sum(task_avgs.values()) / len(task_avgs)
+        overall = clamp_open_score(sum(task_avgs.values()) / len(task_avgs))
 
         output = {
             "model": MODEL_NAME,
