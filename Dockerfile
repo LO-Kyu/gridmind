@@ -1,5 +1,5 @@
 # Stage 1: Build the Go environment server
-FROM golang:1.21 AS builder
+FROM mirror.gcr.io/library/golang:1.21-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum* ./
