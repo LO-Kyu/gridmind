@@ -64,6 +64,10 @@ EPISODE_STEPS = 96
 LAST_STEP_INDEX = EPISODE_STEPS - 1
 SCORE_EPSILON = 1e-6
 
+REW_MIN = -8.0
+REW_MAX = 6.0
+REW_RANGE = REW_MAX - REW_MIN
+
 SYSPROMPT = """You are GridMind, an expert industrial energy management controller.
 You control a building's HVAC, thermal storage, batch job scheduling, and load shedding.
 Your goal is to minimize electricity costs while maintaining comfort and meeting grid demand-response signals.
@@ -111,6 +115,12 @@ def clamp_open_score(score: float) -> float:
     if score >= 1.0:
         return 1.0 - SCORE_EPSILON
     return score
+
+
+def normalize_reward(raw_reward: float) -> float:
+    """Normalize raw reward to (0, 1) using fixed theoretical range."""
+    normalized = (raw_reward - REW_MIN) / REW_RANGE
+    return clamp_open_score(normalized)
 
 
 # ── Environment client ───────────────────────────────────────────────────────
@@ -372,9 +382,10 @@ def run_episode(
                 llm_reuse_remaining -= 1
 
             obs = step_resp["observation"]
-            reward = float(step_resp["reward"])
-            total_reward += reward
-            step_rewards.append(reward)
+            raw_reward = float(step_resp["reward"])
+            reward = normalize_reward(raw_reward)
+            total_reward += raw_reward
+            step_rewards.append(raw_reward)
             total_steps += 1
             done = bool(step_resp.get("done", False))
 
@@ -418,7 +429,15 @@ def run_episode(
     elapsed = time.time() - start_time
     grade = env_client.grade()
 
-    rewards_str = ",".join(f"{r:.2f}" for r in step_rewards)
+    if step_rewards:
+        normalized_rewards = [normalize_reward(r) for r in step_rewards]
+    else:
+        normalized_rewards = []
+
+    episode_score = sum(normalized_rewards) / len(normalized_rewards) if normalized_rewards else SCORE_EPSILON
+    episode_score = clamp_open_score(episode_score)
+
+    rewards_str = ",".join(f"{r:.2f}" for r in normalized_rewards)
     print(
         f"[END] success={'true' if success else 'false'} steps={total_steps} rewards={rewards_str}",
         flush=True
@@ -430,7 +449,7 @@ def run_episode(
         "total_reward": total_reward,
         "total_steps": total_steps,
         "elapsed_sec": elapsed,
-        "score": clamp_open_score(float(grade.get("score", SCORE_EPSILON))),
+        "score": episode_score,
         "sub_scores": grade.get("sub_scores", {}),
         "exploit_detected": grade.get("exploit_detected", False),
     }
