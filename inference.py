@@ -46,27 +46,16 @@ except ImportError:
 # ── Constants ──────────────────────────────────────────────────────────────
 
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
-
-# ── Environment Variable Handling ─────────────────────────────────────────
-# The LLM API credential is read from HF_TOKEN or OPENAI_API_KEY environment variables
-# and passed directly to the OpenAI client for initialization.
-# Primary: HF_TOKEN
-# Fallback: OPENAI_API_KEY (for local testing/development)
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENAI_API_KEY = HF_TOKEN
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
 DEFAULT_EPISODES = 1
 DEFAULT_SEED_BASE = 1000
 MAX_RETRIES = 3
-# 96 steps × 15 min = 24 h (must match env.EpisodeSteps)
 EPISODE_STEPS = 96
 LAST_STEP_INDEX = EPISODE_STEPS - 1
-SCORE_EPSILON = 1e-6
-
-REW_MIN = -8.0
-REW_MAX = 6.0
-REW_RANGE = REW_MAX - REW_MIN
+SCORE_EPSILON = 0.01
 
 SYSPROMPT = """You are GridMind, an expert industrial energy management controller.
 You control a building's HVAC, thermal storage, batch job scheduling, and load shedding.
@@ -109,7 +98,7 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
 
 
 def clamp_open_score(score: float) -> float:
-    """Clamp score into strict open interval (0, 1)."""
+    """Clamp score to strictly between 0 and 1 (never 0.0 or 1.0)."""
     if score <= 0.0:
         return SCORE_EPSILON
     if score >= 1.0:
@@ -117,10 +106,16 @@ def clamp_open_score(score: float) -> float:
     return score
 
 
-def normalize_reward(raw_reward: float) -> float:
-    """Normalize raw reward to (0, 1) using fixed theoretical range."""
-    normalized = (raw_reward - REW_MIN) / REW_RANGE
-    return clamp_open_score(normalized)
+def normalize_rewards(raw_rewards: list[float]) -> list[float]:
+    """Normalize raw rewards to (0, 1) using min-max scaling."""
+    if not raw_rewards:
+        return []
+    raw_min = min(raw_rewards)
+    raw_max = max(raw_rewards)
+    raw_range = raw_max - raw_min
+    if raw_range > 0:
+        return [clamp_open_score((r - raw_min) / raw_range) for r in raw_rewards]
+    return [0.5] * len(raw_rewards)
 
 
 # ── Environment client ───────────────────────────────────────────────────────
@@ -189,8 +184,6 @@ class LLMAgent:
     """OpenAI-compatible LLM agent that chooses actions given observations."""
 
     def __init__(self):
-        # Initialize OpenAI client with credentials from HF_TOKEN (per hackathon spec)
-        # The OPENAI_API_KEY variable contains the HF_TOKEN value passed by evaluators
         self.client = OpenAI(base_url=API_BASE_URL, api_key=OPENAI_API_KEY)
         self.model = MODEL_NAME
         self.fallback_mode = False
@@ -208,17 +201,23 @@ Current observation:
 - Thermal storage level: {obs.get('thermal_storage_level', 0.5):.2f} (0=empty, 1=full)
 - Process demand: {obs.get('process_demand', 15):.1f} kW
 - Current electricity price: ${obs.get('current_price', 0.10):.4f}/kWh
-- Grid stress signal: {obs.get('grid_stress_signal', 0):.3f} (>0.7 = critical, shed load!)
+- Grid stress signal: {obs.get('grid_stress_signal', 0):.3f} (>0.7 = critical, MUST shed 0.2-0.5 load!)
 - Carbon intensity: {obs.get('carbon_intensity', 300):.0f} gCO2/kWh
 - Hour of day: {obs.get('hour_of_day', 12)} (0=midnight, peak prices 8-12 and 17-21)
 - Pending batch job deadlines: {obs.get('batch_queue', [])}
 - Cumulative cost so far: ${obs.get('cumulative_cost', 0):.4f}
 - Episode step: {obs.get('step', 0)}/{LAST_STEP_INDEX}
 
+IMPORTANT RULES:
+- thermal_charge_rate: use NEGATIVE (-0.5) to DISCHARGE storage, POSITIVE (+0.5) to CHARGE
+- load_shed_fraction: MUST be 0.2-0.5 when grid_stress_signal > 0.7, otherwise 0.0
+- shed load during grid stress to earn rewards, else keep at 0.0
+
 Strategy hints:
-- Charge thermal storage when price < $0.08/kWh, discharge when price > $0.15/kWh
+- Charge thermal storage (positive) when price < $0.08/kWh
+- Discharge thermal storage (negative) when price > $0.15/kWh
+- MUST shed load (0.2-0.5) when grid_stress_signal > 0.7
 - Set HVAC low during peak prices (0.3-0.4) and use storage for temperature control
-- Shed 30-50% load if grid_stress_signal > 0.7
 - Schedule batch jobs early if deadline is close (slot 0 or 1)
 
 Respond with ONLY a JSON action:
@@ -347,6 +346,8 @@ def run_episode(
     cached_action = agent._default_action()
 
     step_rewards: list[float] = []
+    reward_min = float('inf')
+    reward_max = float('-inf')
     success = False
     obs: dict[str, Any] = {}
 
@@ -383,18 +384,29 @@ def run_episode(
 
             obs = step_resp["observation"]
             raw_reward = float(step_resp["reward"])
-            reward = normalize_reward(raw_reward)
             total_reward += raw_reward
             step_rewards.append(raw_reward)
+            
+            if raw_reward < reward_min:
+                reward_min = raw_reward
+            if raw_reward > reward_max:
+                reward_max = raw_reward
+            
             total_steps += 1
             done = bool(step_resp.get("done", False))
+
+            reward_range = reward_max - reward_min
+            if reward_range > 0:
+                normalized_reward = clamp_open_score((raw_reward - reward_min) / reward_range)
+            else:
+                normalized_reward = 0.5
 
             action_json = json.dumps(action, separators=(',', ':'))
             last_action_error = step_resp.get("last_action_error")
             error_field = "null" if last_action_error is None else str(last_action_error)
             print(
                 f"[STEP] step={total_steps} action={action_json} "
-                f"reward={reward:.2f} done={'true' if done else 'false'} error={error_field}",
+                f"reward={normalized_reward:.2f} done={'true' if done else 'false'} error={error_field}",
                 flush=True
             )
 
@@ -429,10 +441,7 @@ def run_episode(
     elapsed = time.time() - start_time
     grade = env_client.grade()
 
-    if step_rewards:
-        normalized_rewards = [normalize_reward(r) for r in step_rewards]
-    else:
-        normalized_rewards = []
+    normalized_rewards = normalize_rewards(step_rewards)
 
     episode_score = sum(normalized_rewards) / len(normalized_rewards) if normalized_rewards else SCORE_EPSILON
     episode_score = clamp_open_score(episode_score)
@@ -563,9 +572,9 @@ def main() -> None:
     parser.add_argument(
         "--llm-every",
         type=int,
-        default=4,
+        default=8,
         metavar="N",
-        help="Reuse the same LLM action for N consecutive steps (default: 4).",
+        help="Reuse the same LLM action for N consecutive steps (default: 8).",
     )
     parser.add_argument(
         "--max-steps",
