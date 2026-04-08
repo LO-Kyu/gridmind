@@ -21,8 +21,6 @@ license: mit
 
 ---
 
----
-
 ## 🚀 Live Demo
 
 | | URL |
@@ -58,13 +56,13 @@ GridMind-RL consists of three tightly integrated components:
 
 ```
 Agent (python/inference.py)
-    ?? HTTP POST /step, /reset, /grade
-    ?
-Go Environment Server (main.go) � Port 7860
-    ?
+    → HTTP POST /step, /reset, /grade
+    ↓
+Go Environment Server (main.go) → Port 7860
+    ↓
 Physics Engine (env/environment.go) + Rewards (env/rewards.go) + Tasks (env/tasks.go)
-    ?
-Web Dashboard (dashboard/server.py) � Port 7861
+    ↓
+Web Dashboard (dashboard/server.py) → Port 7861
 ```
 
 **Design philosophy:**
@@ -81,7 +79,7 @@ Web Dashboard (dashboard/server.py) � Port 7861
 
 | Field | Type | Range | Description |
 |-------|------|-------|-------------|
-| `indoor_temperature` | float | [15-27] �C | Building indoor temperature |
+| `indoor_temperature` | float | [15-27] °C | Building indoor temperature |
 | `thermal_storage_level` | float | [0-1] | Thermal storage charge (0=empty, 1=full) |
 | `process_demand` | float | [5-50] kW | Baseline demand |
 | `current_price` | float | [0.03-0.25] $/kWh | Electricity price |
@@ -98,35 +96,86 @@ Web Dashboard (dashboard/server.py) � Port 7861
 | Field | Type | Range | Description |
 |-------|------|-------|-------------|
 | `hvac_power_level` | float | [0-1] | HVAC power (0=off, 1=max) |
-| `thermal_charge_rate` | float | [-1-1] | Storage charge/discharge rate |
-| `batch_job_slot` | int | [0-4] | Batch job scheduling slot |
-| `load_shed_fraction` | float | [0-0.5] | Load shedding fraction |
+| `thermal_charge_rate` | float | [-1 to 1] | Storage charge/discharge rate |
+| `batch_job_slot` | int | [0 to 4] | Batch job scheduling slot |
+| `load_shed_fraction` | float | [0 to 0.5] | Load shedding fraction |
 | `building_id` | int | {0} | Building identifier |
 
-### Reward Function (7 Components)
+### Reward System
+
+#### Raw Reward Components (7 Components)
 
 | Component | Description |
 |-----------|-------------|
 | **Cost Savings** | Negative cost per energy consumed |
-| **Temperature Constraint** | Penalty if T outside [19-23]�C |
+| **Temperature Constraint** | Penalty if T outside [19-23]°C |
 | **Grid Response** | Bonus for load shedding during stress |
 | **Deadline Penalty** | Penalty for missed batch deadlines |
 | **Efficiency Bonus** | Bonus for off-peak charging |
 | **Stability Penalty** | Penalty for rapid control changes |
 | **Carbon Reward** | Bonus for low-carbon periods |
 
+#### Reward Normalization
+
+The inference script normalizes rewards to a standardized range for consistent scoring:
+
+| Metric | Range | Description |
+|--------|-------|-------------|
+| **Per-step reward** | [0.10, 0.90] | Worst action → 0.10, Best action → 0.90 |
+| **Episode score** | (0.01, 0.99) | Clamped to avoid exact 0.0 or 1.0 |
+
+**Normalization formula:**
+```
+normalized_reward = ((raw_reward - raw_min) / (raw_max - raw_min)) * 0.80 + 0.10
+episode_score = clamp(mean(normalized_rewards), 0.01, 0.99)
+```
+
+This ensures:
+- Scores are strictly between 0 and 1 (never exactly 0.0 or 1.0)
+- Relative performance matters more than absolute values
+- Fair comparison across different episodes and tasks
+
+---
+
+## Output Format
+
+The inference script emits machine-parsed stdout for judge evaluation:
+
+```
+[START] task=<task_name> env=<benchmark> model=<model_name>
+[STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+[END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
+```
+
+**Rules:**
+- One `[START]` line at episode begin
+- One `[STEP]` line per step, immediately after `env.step()` returns
+- One `[END]` line after `env.close()`, always emitted (even on exception)
+- `reward` and `rewards` are formatted to 2 decimal places
+- `done` and `success` are lowercase booleans: `true` or `false`
+- `error` is the raw `last_action_error` string, or `null` if none
+
+**Example:**
+```
+[START] task=gridmind-task-1 env=gridmind model=Qwen2.5-7B-Instruct
+[STEP] step=1 action={"hvac_power_level":0.7,"thermal_charge_rate":0.5,...} reward=0.50 done=false error=null
+[STEP] step=2 action={"hvac_power_level":0.5,"thermal_charge_rate":-0.3,...} reward=0.83 done=false error=null
+[STEP] step=96 action={"hvac_power_level":0.3,"thermal_charge_rate":0.0,...} reward=0.90 done=true error=null
+[END] success=true steps=96 score=0.683 rewards=0.50,0.55,0.83,...,0.90
+```
+
 ---
 
 ## Tasks
 
 | Task | Difficulty | Objective | Baseline Score |
-|------|-----------|-----------|-----------------|
+|------|-----------|-----------|----------------|
 | Task 1 | Easy | Minimize cost only | **0.708** |
 | Task 2 | Medium | Minimize cost + maintain comfort | **0.633** |
 | Task 3 | Hard | Full demand response + scheduling | **0.598** |
 
 **Task 1 (Easy)**: Cost minimization, no constraints  
-**Task 2 (Medium)**: Cost + temperature comfort (19-23�C)  
+**Task 2 (Medium)**: Cost + temperature comfort (19-23°C)  
 **Task 3 (Hard)**: Cost + comfort + grid response + batch scheduling + carbon
 
 ---
@@ -149,26 +198,35 @@ go run main.go
 
 **Terminal 2: Run agent**
 ```bash
-export HF_TOKEN="your_api_key"
-export API_BASE_URL="https://openrouter.ai/api/v1"
-export MODEL_NAME="meta-llama/llama-3.3-70b-instruct:free"
+# Copy and configure .env file
+cp .env.example .env
+# Edit .env with your API keys
 
-# Heuristic policy (no LLM)
+# Heuristic policy (no LLM, fastest)
 python inference.py --fast-mode --episodes 1
 
-# LLM agent
+# LLM agent (default: reuses action for 8 steps)
 python inference.py --episodes 1
+
+# LLM agent (custom reuse interval)
+python inference.py --llm-every 4 --episodes 1
 ```
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HF_TOKEN` | Yes | � | LLM API key |
-| `API_BASE_URL` | No | `https://openrouter.ai/api/v1` | LLM endpoint |
-| `MODEL_NAME` | No | `meta-llama/llama-3.3-70b-instruct:free` | Model ID |
+| `HF_TOKEN` | **Yes** | — | Hugging Face / LLM API token |
+| `API_BASE_URL` | No | `https://api-inference.huggingface.co/v1` | LLM endpoint |
+| `MODEL_NAME` | No | `Qwen/Qwen2.5-7B-Instruct` | Model identifier |
 | `ENV_URL` | No | `http://localhost:7860` | Environment server URL |
-| `OPENAI_API_KEY` | No | � | Alternative to HF_TOKEN |
+
+**Example `.env` file:**
+```bash
+HF_TOKEN=hf_your_token_here
+API_BASE_URL=https://api-inference.huggingface.co/v1
+MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+```
 
 ---
 
@@ -213,23 +271,23 @@ gridmind-rl/
 +-- openenv.yaml               # OpenEnv spec
 +-- Dockerfile                 # Container build
 +-- env/
-�   +-- environment.go         # Physics simulation
-�   +-- models.go              # Data models
-�   +-- rewards.go             # Reward computation
-�   +-- tasks.go               # Task grading
+    +-- environment.go         # Physics simulation
+    +-- models.go              # Data models
+    +-- rewards.go             # Reward computation
+    +-- tasks.go               # Task grading
 +-- python/
-�   +-- inference.py           # LLM agent
-�   +-- models.py              # Pydantic models
-�   +-- requirements.txt
+    +-- inference.py           # LLM agent
+    +-- models.py              # Pydantic models
+    +-- requirements.txt
 +-- dashboard/
-�   +-- server.py              # Web server (port 7861)
-�   +-- static/                # Frontend assets
+    +-- server.py              # Web server (port 7861)
+    +-- static/                # Frontend assets
 +-- data/
-�   +-- price_curves.json      # Price data
-�   +-- generate_prices.py     # Price generator
+    +-- price_curves.json      # Price data
+    +-- generate_prices.py     # Price generator
 +-- tests/
-�   +-- test_graders.py        # Python tests
-�   +-- environment_test.go    # Go tests
+    +-- test_graders.py        # Python tests
+    +-- environment_test.go    # Go tests
 +-- baseline_scores.json       # Reference scores
 +-- .env.example               # Environment template
 +-- LICENSE                    # MIT License
