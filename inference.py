@@ -1,26 +1,18 @@
 """
-GridMind-RL Baseline Inference Script
---------------------------------------
+GridMind-RL Inference Script
+----------------------------
 Runs an LLM agent against all 3 tasks for N episodes each.
 Uses the OpenAI Python client pointed at any OpenAI-compatible endpoint.
 
-Required environment variables (set in .env or shell):
-    API_BASE_URL   — The API endpoint for the LLM (default: OpenRouter)
-    MODEL_NAME     — The model identifier to use for inference
-    OPENAI_API_KEY — API key for authentication (works with any provider)
+Required environment variables:
+    HF_TOKEN     — Hugging Face / API token (mandatory, no default)
+    API_BASE_URL — API endpoint for the LLM (has default)
+    MODEL_NAME   — Model identifier (has default)
 
-Usage:
-    # Option 1: Use .env file (recommended — just paste your key)
-    python inference.py
-
-    # Option 2: Set env vars manually
-    export API_BASE_URL=https://openrouter.ai/api/v1
-    export MODEL_NAME=meta-llama/llama-3.1-8b-instruct:free
-    export OPENAI_API_KEY=sk-or-v1-xxxx
-    python inference.py
-
-    # Option 3: Fast mode (no LLM, heuristic only)
-    python inference.py --fast-mode --episodes 1
+STDOUT FORMAT (machine-parsed by judge):
+    [START] task=<task_name> env=<benchmark> model=<model_name>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 
 from __future__ import annotations
@@ -36,27 +28,36 @@ from typing import Any, Optional
 import requests
 from openai import OpenAI
 
-# ── Load .env file (if present) ────────────────────────────────────────────
+# ── Load .env file ─────────────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # reads .env from current directory or project root
+    load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed — env vars must be set manually
+    pass
 
-# ── Constants ──────────────────────────────────────────────────────────────
-
-ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
-HF_TOKEN = os.getenv("HF_TOKEN")
-OPENAI_API_KEY = HF_TOKEN
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+# ── Environment Variables ────────────────────────────────────────────────────
+ENV_URL      = os.getenv("ENV_URL", "http://localhost:7860")
+HF_TOKEN     = os.getenv("HF_TOKEN")  # Mandatory — no default
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
+MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+
+# ── Constants ────────────────────────────────────────────────────────────────
+BENCHMARK     = "gridmind"
+EPISODE_STEPS = 96
+LAST_STEP     = EPISODE_STEPS - 1
+MAX_RETRIES   = 3
 DEFAULT_EPISODES = 1
 DEFAULT_SEED_BASE = 1000
-MAX_RETRIES = 3
-EPISODE_STEPS = 96
-LAST_STEP_INDEX = EPISODE_STEPS - 1
+
+# Reward range per step in this environment: (0.10, 0.90)
+# Worst action -> 0.10, best action -> 0.90
+REWARD_MIN = 0.10
+REWARD_MAX = 0.90
+
+# Score clamp buffer (never output exactly 0.0 or 1.0)
 SCORE_EPSILON = 0.01
 
+# ── System Prompt ────────────────────────────────────────────────────────────
 SYSPROMPT = """You are GridMind, an expert industrial energy management controller.
 You control a building's HVAC, thermal storage, batch job scheduling, and load shedding.
 Your goal is to minimize electricity costs while maintaining comfort and meeting grid demand-response signals.
@@ -68,7 +69,7 @@ TASK_DESCRIPTIONS = {
     3: "Task 3 (Hard - Full Demand Response): Minimize cost, maintain temperature, respond to grid stress (shed when grid_stress_signal > 0.7), schedule batch jobs, minimize carbon.",
 }
 
-ACTION_SCHEMA_STR = """{
+ACTION_SCHEMA = """{
   "hvac_power_level": <float 0.0-1.0>,
   "thermal_charge_rate": <float -1.0 to 1.0>,
   "batch_job_slot": <int 0-4>,
@@ -77,8 +78,37 @@ ACTION_SCHEMA_STR = """{
 }"""
 
 
-def extract_json_object(text: str) -> dict[str, Any] | None:
-    """Parse first balanced {...} JSON object from text (handles nested braces)."""
+# ── Logging Helpers (judge-parsed format) ────────────────────────────────────
+def log_start(task: str, env_name: str, model: str) -> None:
+    """[START] line — emitted once at episode begin."""
+    print(f"[START] task={task} env={env_name} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool,
+             error: Optional[str] = None) -> None:
+    """[STEP] line — emitted after each env.step() returns."""
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} "
+        f"done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
+    """[END] line — always emitted (even on exception)."""
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} "
+        f"score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ── Utility Functions ─────────────────────────────────────────────────────────
+def extract_json_object(text: str) -> Optional[dict[str, Any]]:
+    """Parse first balanced {...} JSON object from text."""
     start = text.find("{")
     if start < 0:
         return None
@@ -91,7 +121,7 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
             depth -= 1
             if depth == 0:
                 try:
-                    return json.loads(text[start : i + 1])
+                    return json.loads(text[start:i + 1])
                 except json.JSONDecodeError:
                     return None
     return None
@@ -106,85 +136,34 @@ def clamp_open_score(score: float) -> float:
     return score
 
 
-def normalize_rewards(raw_rewards: list[float]) -> list[float]:
-    """Normalize raw rewards to (0, 1) using min-max scaling."""
-    if not raw_rewards:
-        return []
-    raw_min = min(raw_rewards)
-    raw_max = max(raw_rewards)
-    raw_range = raw_max - raw_min
-    if raw_range > 0:
-        return [clamp_open_score((r - raw_min) / raw_range) for r in raw_rewards]
-    return [0.5] * len(raw_rewards)
+def normalize_reward(raw_reward: float, raw_min: float, raw_max: float) -> float:
+    """Normalize raw reward to (REWARD_MIN, REWARD_MAX) range."""
+    if raw_max == raw_min:
+        return (REWARD_MIN + REWARD_MAX) / 2
+    normalized = (raw_reward - raw_min) / (raw_max - raw_min)
+    normalized = normalized * (REWARD_MAX - REWARD_MIN) + REWARD_MIN
+    return clamp_open_score(normalized)
 
 
-# ── Environment client ───────────────────────────────────────────────────────
+def compute_score(rewards: list[float]) -> float:
+    """Return mean reward clamped strictly to (0.01, 0.99)."""
+    if not rewards:
+        return SCORE_EPSILON
+    mean_reward = sum(rewards) / len(rewards)
+    return clamp_open_score(round(mean_reward, 4))
 
 
-class GridMindEnvClient:
-    """Simple HTTP client for the GridMind-RL Go environment server."""
-
-    def __init__(self, base_url: str = ENV_URL, timeout: int = 30):
-        self.base = base_url.rstrip("/")
-        self.timeout = timeout
-
-    def health(self) -> bool:
-        try:
-            r = requests.get(f"{self.base}/health", timeout=5)
-            return r.status_code == 200
-        except Exception:
-            return False
-
-    def reset(self, task_id: int = 1, seed: int = 42, num_buildings: int = 1) -> dict | None:
-        try:
-            payload = {"task_id": task_id, "seed": seed, "num_buildings": num_buildings}
-            r = requests.post(f"{self.base}/reset", json=payload, timeout=self.timeout)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[ERROR] Failed to reset environment: {e}", file=sys.stderr)
-            return None
-
-    def step(self, action: dict) -> dict | None:
-        try:
-            r = requests.post(f"{self.base}/step", json=action, timeout=self.timeout)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[ERROR] Failed to step environment: {e}", file=sys.stderr)
-            return None
-
-    def grade(self) -> dict:
-        try:
-            r = requests.get(f"{self.base}/grade", timeout=self.timeout)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[ERROR] Failed to grade: {e}", file=sys.stderr)
-            return {"score": SCORE_EPSILON, "sub_scores": {}, "exploit_detected": False}
-
-    def state(self) -> dict | None:
-        try:
-            r = requests.get(f"{self.base}/state", timeout=self.timeout)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[ERROR] Failed to get state: {e}", file=sys.stderr)
-            return None
-
-    def close(self) -> None:
-        """Compatibility close hook for episode-finalization contract."""
-        return None
+# ── LLM Client ───────────────────────────────────────────────────────────────
+def get_llm_client() -> OpenAI:
+    if not HF_TOKEN:
+        raise EnvironmentError("HF_TOKEN environment variable is not set.")
+    return OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
 
-# ── LLM agent ───────────────────────────────────────────────────────────────
-
-
+# ── LLM Agent ────────────────────────────────────────────────────────────────
 class LLMAgent:
-    """OpenAI-compatible LLM agent that chooses actions given observations."""
-
     def __init__(self):
-        self.client = OpenAI(base_url=API_BASE_URL, api_key=OPENAI_API_KEY)
+        self.client = get_llm_client()
         self.model = MODEL_NAME
         self.fallback_mode = False
 
@@ -192,6 +171,7 @@ class LLMAgent:
         """Prompt the LLM with current observation, return parsed action dict."""
         if self.fallback_mode:
             return self._heuristic_action(obs)
+
         task_desc = TASK_DESCRIPTIONS.get(task_id, TASK_DESCRIPTIONS[1])
 
         prompt = f"""{task_desc}
@@ -206,12 +186,12 @@ Current observation:
 - Hour of day: {obs.get('hour_of_day', 12)} (0=midnight, peak prices 8-12 and 17-21)
 - Pending batch job deadlines: {obs.get('batch_queue', [])}
 - Cumulative cost so far: ${obs.get('cumulative_cost', 0):.4f}
-- Episode step: {obs.get('step', 0)}/{LAST_STEP_INDEX}
+- Episode step: {obs.get('step', 0)}/{LAST_STEP}
 
 IMPORTANT RULES:
-- thermal_charge_rate: use NEGATIVE (-0.5) to DISCHARGE storage, POSITIVE (+0.5) to CHARGE
+- thermal_charge_rate: NEGATIVE = DISCHARGE storage, POSITIVE = CHARGE
 - load_shed_fraction: MUST be 0.2-0.5 when grid_stress_signal > 0.7, otherwise 0.0
-- shed load during grid stress to earn rewards, else keep at 0.0
+- shed load during grid stress to earn rewards
 
 Strategy hints:
 - Charge thermal storage (positive) when price < $0.08/kWh
@@ -221,7 +201,7 @@ Strategy hints:
 - Schedule batch jobs early if deadline is close (slot 0 or 1)
 
 Respond with ONLY a JSON action:
-{ACTION_SCHEMA_STR}"""
+{ACTION_SCHEMA}"""
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -244,10 +224,7 @@ Respond with ONLY a JSON action:
                 err_str = str(e)
                 print(f"  [LLM attempt {attempt+1}/{MAX_RETRIES}] error: {err_str}", file=sys.stderr)
                 if "402" in err_str or "depleted" in err_str:
-                    print(
-                        "  [WARN] Hugging Face free credits depleted! Switching to local heuristic agent for the rest of the simulation.",
-                        file=sys.stderr,
-                    )
+                    print("  [WARN] API credits depleted! Switching to heuristic agent.", file=sys.stderr)
                     self.fallback_mode = True
                     return self._heuristic_action(obs)
                 time.sleep(1)
@@ -264,7 +241,7 @@ Respond with ONLY a JSON action:
         }
 
     def _heuristic_action(self, obs: dict) -> dict:
-        """Rule-based policy (deterministic given obs)."""
+        """Rule-based fallback policy."""
         price = obs.get("current_price", 0.10)
         stress = obs.get("grid_stress_signal", 0.0)
         temp = obs.get("indoor_temperature", 21.0)
@@ -311,9 +288,61 @@ Respond with ONLY a JSON action:
         }
 
 
-# ── Episode runner ───────────────────────────────────────────────────────────
+# ── Environment Client ────────────────────────────────────────────────────────
+class GridMindEnvClient:
+    def __init__(self, base_url: str = ENV_URL, timeout: int = 30):
+        self.base = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def health(self) -> bool:
+        try:
+            r = requests.get(f"{self.base}/health", timeout=5)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def reset(self, task_id: int = 1, seed: int = 42, num_buildings: int = 1) -> Optional[dict]:
+        try:
+            payload = {"task_id": task_id, "seed": seed, "num_buildings": num_buildings}
+            r = requests.post(f"{self.base}/reset", json=payload, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to reset environment: {e}", file=sys.stderr)
+            return None
+
+    def step(self, action: dict) -> Optional[dict]:
+        try:
+            r = requests.post(f"{self.base}/step", json=action, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to step environment: {e}", file=sys.stderr)
+            return None
+
+    def grade(self) -> dict:
+        try:
+            r = requests.get(f"{self.base}/grade", timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to grade: {e}", file=sys.stderr)
+            return {"score": SCORE_EPSILON, "sub_scores": {}, "exploit_detected": False}
+
+    def state(self) -> Optional[dict]:
+        try:
+            r = requests.get(f"{self.base}/state", timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to get state: {e}", file=sys.stderr)
+            return None
+
+    def close(self) -> None:
+        return None
 
 
+# ── Episode Runner ────────────────────────────────────────────────────────────
 def run_episode(
     env_client: GridMindEnvClient,
     agent: LLMAgent,
@@ -322,19 +351,12 @@ def run_episode(
     *,
     fast_mode: bool,
     llm_every: int,
-    max_steps: int | None,
+    max_steps: Optional[int],
     verbose: bool = False,
 ) -> dict[str, Any]:
-    """Run a single episode and emit hackathon-compliant stdout format.
-    
-    Emits:
-      [START] task=<name> env=gridmind model=<model>
-      [STEP] step=<n> action=<json> reward=<0.00> done=<true|false> error=<msg|null>
-      ...
-      [END] success=<true|false> steps=<n> rewards=<r1,r2,...>
-    """
+    """Run a single episode and emit hackathon-compliant stdout format."""
     task_name = f"gridmind-task-{task_id}"
-    print(f"[START] task={task_name} env=gridmind model={MODEL_NAME}", flush=True)
+    log_start(task=task_name, env_name=BENCHMARK, model=MODEL_NAME)
 
     total_reward = 0.0
     total_steps = 0
@@ -345,7 +367,7 @@ def run_episode(
     llm_reuse_remaining = 0
     cached_action = agent._default_action()
 
-    step_rewards: list[float] = []
+    raw_rewards: list[float] = []
     reward_min = float('inf')
     reward_max = float('-inf')
     success = False
@@ -369,13 +391,15 @@ def run_episode(
                     cached_action = agent.choose_action(obs, task_id)
                     llm_reuse_remaining = max(1, llm_every)
                 action = cached_action
-            
+
             step_resp = env_client.step(action)
             if step_resp is None or not isinstance(step_resp, dict) or "observation" not in step_resp:
-                print(
-                    f"[STEP] step={total_steps + 1} action=null "
-                    f"reward=0.00 done=true error=invalid step response from environment",
-                    flush=True
+                log_step(
+                    step=total_steps + 1,
+                    action="null",
+                    reward=0.0,
+                    done=True,
+                    error="invalid step response from environment",
                 )
                 break
 
@@ -385,29 +409,26 @@ def run_episode(
             obs = step_resp["observation"]
             raw_reward = float(step_resp["reward"])
             total_reward += raw_reward
-            step_rewards.append(raw_reward)
-            
+            raw_rewards.append(raw_reward)
+
             if raw_reward < reward_min:
                 reward_min = raw_reward
             if raw_reward > reward_max:
                 reward_max = raw_reward
-            
+
             total_steps += 1
             done = bool(step_resp.get("done", False))
 
-            reward_range = reward_max - reward_min
-            if reward_range > 0:
-                normalized_reward = clamp_open_score((raw_reward - reward_min) / reward_range)
-            else:
-                normalized_reward = 0.5
+            normalized_reward = normalize_reward(raw_reward, reward_min, reward_max)
 
             action_json = json.dumps(action, separators=(',', ':'))
             last_action_error = step_resp.get("last_action_error")
-            error_field = "null" if last_action_error is None else str(last_action_error)
-            print(
-                f"[STEP] step={total_steps} action={action_json} "
-                f"reward={normalized_reward:.2f} done={'true' if done else 'false'} error={error_field}",
-                flush=True
+            log_step(
+                step=total_steps,
+                action=action_json,
+                reward=normalized_reward,
+                done=done,
+                error=last_action_error,
             )
 
             if verbose and total_steps % 16 == 0:
@@ -421,37 +442,33 @@ def run_episode(
                 )
 
         success = bool(step_resp.get("done", False))
+
     except Exception as e:
-        err = str(e)
-        if not err:
-            err = "unknown error"
-        if "\n" in err:
-            err = err.replace("\n", " ")
-        if "\r" in err:
-            err = err.replace("\r", " ")
+        err = str(e) or "unknown error"
+        err = err.replace("\n", " ").replace("\r", " ")
         if total_steps < step_limit:
-            print(
-                f"[STEP] step={total_steps + 1} action=null "
-                f"reward=0.00 done=true error={err}",
-                flush=True
+            log_step(
+                step=total_steps + 1,
+                action="null",
+                reward=0.0,
+                done=True,
+                error=err,
             )
+
     finally:
         env_client.close()
 
     elapsed = time.time() - start_time
-    grade = env_client.grade()
+    normalized_rewards = [normalize_reward(r, reward_min, reward_max) for r in raw_rewards]
+    episode_score = compute_score(normalized_rewards)
 
-    normalized_rewards = normalize_rewards(step_rewards)
-
-    episode_score = sum(normalized_rewards) / len(normalized_rewards) if normalized_rewards else SCORE_EPSILON
-    episode_score = clamp_open_score(episode_score)
-
-    rewards_str = ",".join(f"{r:.2f}" for r in normalized_rewards)
-    print(
-        f"[END] success={'true' if success else 'false'} steps={total_steps} rewards={rewards_str}",
-        flush=True
+    log_end(
+        success=success,
+        steps=total_steps,
+        score=episode_score,
+        rewards=normalized_rewards,
     )
-    
+
     return {
         "task_id": task_id,
         "seed": seed,
@@ -459,51 +476,37 @@ def run_episode(
         "total_steps": total_steps,
         "elapsed_sec": elapsed,
         "score": episode_score,
-        "sub_scores": grade.get("sub_scores", {}),
-        "exploit_detected": grade.get("exploit_detected", False),
+        "sub_scores": {},
+        "exploit_detected": False,
     }
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
-
+# ── Environment Server Starter ────────────────────────────────────────────────
 def start_environment_server(port: int = 7860) -> Optional[subprocess.Popen]:
-    """Start the GridMind-RL environment server as a background process.
-    
-    Returns:
-        A Popen object if the server was started, or None if it's already running.
-    """
-    # First check if server is already running
+    """Start the GridMind-RL environment server as a background process."""
     try:
         r = requests.get(f"http://localhost:{port}/health", timeout=2)
         if r.status_code == 200:
             print(f"[INFO] Environment server already running on port {port}", file=sys.stderr)
             return None
     except Exception:
-        pass  # Server not running, we'll start it
-    
+        pass
+
     print(f"[INFO] Starting environment server on port {port}...", file=sys.stderr)
-    
-    # Try to find and run the server
+
     try:
-        # Prepare environment
         env = os.environ.copy()
         env["PORT"] = str(port)
-        if "PYTHONPATH" in env:
-            env["PYTHONPATH"] = "." + os.pathsep + env["PYTHONPATH"]
-        else:
-            env["PYTHONPATH"] = "."
-        
-        # Look for compiled Go binary first
+
         binary_paths = [
-            "/usr/local/bin/gridmind-server",  # Docker path
-            "./gridmind-server",               # Local Linux/Mac
-            "./gridmind-server.exe",           # Local Windows
+            "/usr/local/bin/gridmind-server",
+            "./gridmind-server",
+            "./gridmind-server.exe",
         ]
-        
+
         for binary_path in binary_paths:
             if os.path.exists(binary_path):
                 try:
-                    print(f"[INFO] Running Go binary: {binary_path}", file=sys.stderr)
                     proc = subprocess.Popen(
                         [binary_path],
                         env=env,
@@ -515,51 +518,40 @@ def start_environment_server(port: int = 7860) -> Optional[subprocess.Popen]:
                         return proc
                 except Exception as e:
                     print(f"[DEBUG] Failed with {binary_path}: {e}", file=sys.stderr)
-        
-        # Try to compile Go binary if 'go' is available
+
         try:
-            print(f"[INFO] Attempting to compile Go executable...", file=sys.stderr)
-            compile_cmd = ["go", "build", "-o", "gridmind-server", "main.go"]
-            result = subprocess.run(
-                compile_cmd,
+            subprocess.run(
+                ["go", "build", "-o", "gridmind-server", "main.go"],
                 capture_output=True,
                 timeout=60,
                 cwd=".",
             )
-            if result.returncode == 0:
-                print(f"[INFO] Compilation successful, starting server...", file=sys.stderr)
-                proc = subprocess.Popen(
-                    ["./gridmind-server"],
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                time.sleep(2)
-                if proc.poll() is None:
-                    return proc
-        except Exception as e:
-            print(f"[DEBUG] Could not compile: {e}", file=sys.stderr)
-        
-        # Fallback: try to run via Python server module
-        print(f"[INFO] Attempting Python server module...", file=sys.stderr)
+            proc = subprocess.Popen(["./gridmind-server"], env=env)
+            time.sleep(2)
+            if proc.poll() is None:
+                return proc
+        except Exception:
+            pass
+
         proc = subprocess.Popen(
             [sys.executable, "-m", "server.app"],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=".",
         )
         time.sleep(3)
         if proc.poll() is None:
             return proc
-        
+
     except Exception as e:
         print(f"[WARNING] Could not start environment server: {e}", file=sys.stderr)
-        return None
+
+    return None
 
 
+# ── Main ─────────────────────────────────────────────────────────────────────
 def main() -> None:
-    parser = argparse.ArgumentParser(description="GridMind-RL baseline inference")
+    parser = argparse.ArgumentParser(description="GridMind-RL inference script")
     parser.add_argument("--episodes", type=int, default=DEFAULT_EPISODES)
     parser.add_argument("--env-url", type=str, default=ENV_URL)
     parser.add_argument("--verbose", action="store_true")
@@ -567,31 +559,26 @@ def main() -> None:
     parser.add_argument(
         "--fast-mode",
         action="store_true",
-        help="Heuristic policy only (no LLM calls; fastest, fully reproducible).",
+        help="Heuristic policy only (no LLM calls).",
     )
     parser.add_argument(
         "--llm-every",
         type=int,
         default=8,
         metavar="N",
-        help="Reuse the same LLM action for N consecutive steps (default: 8).",
+        help="Reuse the same LLM action for N steps (default: 8).",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=None,
         metavar="N",
-        help="Stop after N steps (default: full episode). Grade uses partial episode.",
+        help="Stop after N steps.",
     )
     args = parser.parse_args()
-    
-    if not HF_TOKEN:
-        print("HF_TOKEN is required.", file=sys.stderr)
-        sys.exit(1)
 
-    # Start the environment server if not already running
     server_proc = start_environment_server(port=7860)
-    
+
     try:
         env_client = GridMindEnvClient(base_url=args.env_url)
 
@@ -622,13 +609,13 @@ def main() -> None:
                 )
                 task_scores.append(float(result["score"]))
                 all_results.append(result)
-            _ = sum(task_scores) / len(task_scores)
 
         task_avgs: dict[int, float] = {}
         for task_id in [1, 2, 3]:
             scores = [float(r["score"]) for r in all_results if r["task_id"] == task_id]
             avg = clamp_open_score(sum(scores) / len(scores)) if scores else SCORE_EPSILON
             task_avgs[task_id] = avg
+
         overall = clamp_open_score(sum(task_avgs.values()) / len(task_avgs))
 
         output = {
@@ -645,14 +632,13 @@ def main() -> None:
         }
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2)
+
     finally:
-        # Clean up the server process if we started it
         if server_proc:
             try:
                 server_proc.terminate()
                 server_proc.wait(timeout=5)
-            except Exception as e:
-                print(f"[WARNING] Failed to terminate server: {e}", file=sys.stderr)
+            except Exception:
                 try:
                     server_proc.kill()
                 except Exception:
