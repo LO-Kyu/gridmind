@@ -290,11 +290,15 @@ Respond with ONLY a JSON action:
 
 # ── Environment Client ────────────────────────────────────────────────────────
 class GridMindEnvClient:
+    """HTTP client for the GridMind-RL Go environment server."""
+
     def __init__(self, base_url: str = ENV_URL, timeout: int = 30):
+        """Initialize client with base URL and timeout."""
         self.base = base_url.rstrip("/")
         self.timeout = timeout
 
     def health(self) -> bool:
+        """Check if the environment server is healthy."""
         try:
             r = requests.get(f"{self.base}/health", timeout=5)
             return r.status_code == 200
@@ -302,6 +306,7 @@ class GridMindEnvClient:
             return False
 
     def reset(self, task_id: int = 1, seed: int = 42, num_buildings: int = 1) -> Optional[dict]:
+        """Start a new episode with the given task and seed."""
         try:
             payload = {"task_id": task_id, "seed": seed, "num_buildings": num_buildings}
             r = requests.post(f"{self.base}/reset", json=payload, timeout=self.timeout)
@@ -312,6 +317,7 @@ class GridMindEnvClient:
             return None
 
     def step(self, action: dict) -> Optional[dict]:
+        """Take an action and receive the next observation and reward."""
         try:
             r = requests.post(f"{self.base}/step", json=action, timeout=self.timeout)
             r.raise_for_status()
@@ -321,6 +327,7 @@ class GridMindEnvClient:
             return None
 
     def grade(self) -> dict:
+        """Get the episode grade/score after completion."""
         try:
             r = requests.get(f"{self.base}/grade", timeout=self.timeout)
             r.raise_for_status()
@@ -330,6 +337,7 @@ class GridMindEnvClient:
             return {"score": SCORE_EPSILON, "sub_scores": {}, "exploit_detected": False}
 
     def state(self) -> Optional[dict]:
+        """Get the current environment state."""
         try:
             r = requests.get(f"{self.base}/state", timeout=self.timeout)
             r.raise_for_status()
@@ -339,6 +347,7 @@ class GridMindEnvClient:
             return None
 
     def close(self) -> None:
+        """Close the client connection (no-op for HTTP)."""
         return None
 
 

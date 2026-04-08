@@ -267,24 +267,22 @@ LLM and RL agents are expected to exceed these scores.
 ```
 gridmind-rl/
 +-- main.go                    # HTTP server & OpenEnv API
-+-- inference.py               # Agent entry point
++-- inference.py               # Agent entry point (LLM + heuristic)
 +-- openenv.yaml               # OpenEnv spec
 +-- Dockerfile                 # Container build
 +-- env/
     +-- environment.go         # Physics simulation
-    +-- models.go              # Data models
-    +-- rewards.go             # Reward computation
-    +-- tasks.go               # Task grading
-+-- python/
-    +-- inference.py           # LLM agent
-    +-- models.py              # Pydantic models
-    +-- requirements.txt
+    +-- models.go             # Data models
+    +-- rewards.go            # Reward computation
+    +-- tasks.go              # Task grading
++-- server/
+    +-- app.py                # Server entry point
 +-- dashboard/
     +-- server.py              # Web server (port 7861)
-    +-- static/                # Frontend assets
+    +-- static/               # Frontend assets
 +-- data/
     +-- price_curves.json      # Price data
-    +-- generate_prices.py     # Price generator
+    +-- generate_prices.py    # Price generator
 +-- tests/
     +-- test_graders.py        # Python tests
     +-- environment_test.go    # Go tests
