@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	EpisodeSteps     = 96     // 24 hours × 15-min intervals (96 × 0.25h = 24h)
-	StepDurationHrs  = 0.25  // each step = 15 minutes = 0.25 h
-	MaxBuildings     = 3
-	DefaultSetpoint  = 21.0  // °C comfortable indoor temp
-	TMinDefault      = 19.0  // °C lower bound
-	TMaxDefault      = 23.0  // °C upper bound
-	MaxHVACPowerKW   = 50.0  // kW per building
-	MaxStorageKWh    = 100.0 // kWh thermal storage capacity
-	StorageLossRate  = 0.005 // fraction lost per step (thermal dissipation)
-	MaxBatchJobs     = 5     // max concurrent batch jobs per building
+	EpisodeSteps    = 96   // 24 hours × 15-min intervals (96 × 0.25h = 24h)
+	StepDurationHrs = 0.25 // each step = 15 minutes = 0.25 h
+	MaxBuildings    = 3
+	DefaultSetpoint = 21.0  // °C comfortable indoor temp
+	TMinDefault     = 19.0  // °C lower bound
+	TMaxDefault     = 23.0  // °C upper bound
+	MaxHVACPowerKW  = 50.0  // kW per building
+	MaxStorageKWh   = 100.0 // kWh thermal storage capacity
+	StorageLossRate = 0.005 // fraction lost per step (thermal dissipation)
+	MaxBatchJobs    = 5     // max concurrent batch jobs per building
 )
 
 // Environment is the thread-safe top-level simulation manager.
@@ -35,11 +35,11 @@ type Environment struct {
 	difficulty   string
 	numBuildings int
 
-	Buildings    []*BuildingState
-	PriceCurve   [EpisodeSteps]float64 // $/kWh for each step
-	CarbonCurve  [EpisodeSteps]float64 // gCO2/kWh for each step
-	Replay       []ReplayEntry
-	LastActions  []ActionModel
+	Buildings   []*BuildingState
+	PriceCurve  [EpisodeSteps]float64 // $/kWh for each step
+	CarbonCurve [EpisodeSteps]float64 // gCO2/kWh for each step
+	Replay      []ReplayEntry
+	LastActions []ActionModel
 
 	// History for dashboard rendering (per building)
 	TempHistory     [][]float64
@@ -49,9 +49,9 @@ type Environment struct {
 	RewardHistory   [][]RewardComponents
 
 	// Exploit detection counters
-	totalShedSteps       []int    // steps where load_shed > 0.4
-	thermalCycleCounts   []int    // rapid thermal storage reversals
-	prevChargeRates      []float64
+	totalShedSteps     []int // steps where load_shed > 0.4
+	thermalCycleCounts []int // rapid thermal storage reversals
+	prevChargeRates    []float64
 }
 
 // NewEnvironment creates an initialised (but not reset) environment.
@@ -258,7 +258,7 @@ func (e *Environment) GetReplay() []ReplayEntry {
 func (e *Environment) newBuildingState(id int) *BuildingState {
 	// Randomise initial conditions slightly
 	initTemp := DefaultSetpoint + (e.rng.Float64()-0.5)*2.0
-	storageLevel := 0.3 + e.rng.Float64()*0.4 // start 30–70% full
+	storageLevel := 0.3 + e.rng.Float64()*0.4  // start 30–70% full
 	outdoorTemp := 15.0 + e.rng.Float64()*15.0 // 15–30 °C
 
 	b := &BuildingState{
@@ -308,13 +308,13 @@ func (e *Environment) generateBatchJobs() []BatchJob {
 		}
 		deadline := 4 + e.rng.Intn(span)
 		jobs[i] = BatchJob{
-			ID:           i + 1,
-			DeadlineSlot: deadline,
-			Duration:     1 + e.rng.Intn(3),
-			PowerDraw:    5.0 + e.rng.Float64()*15.0,
-			Scheduled:    false,
-			ScheduledAt:  -1,
-			Completed:    false,
+			ID:             i + 1,
+			DeadlineSlot:   deadline,
+			Duration:       1 + e.rng.Intn(3),
+			PowerDraw:      5.0 + e.rng.Float64()*15.0,
+			Scheduled:      false,
+			ScheduledAt:    -1,
+			Completed:      false,
 			MissedDeadline: false,
 		}
 	}
@@ -389,13 +389,13 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 	b.HourOfDay = (s / 4) % 24
 
 	// Stochastic grid stress events (more frequent in hard mode)
-	b.GridStressSignal = e.updateGridStress(b, s)
+	b.GridStressSignal = e.updateGridStress(s)
 
 	// Weather perturbation: outdoor temp drifts sinusoidally + noise
-	b.OutdoorTemperature = e.updateOutdoorTemp(b, s)
+	b.OutdoorTemperature = e.updateOutdoorTemp(s)
 
 	// Process demand fluctuation
-	b.ProcessDemand = e.updateProcessDemand(b, s)
+	b.ProcessDemand = e.updateProcessDemand(s)
 
 	// ----- Apply actions -----
 
@@ -456,28 +456,28 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 	// Baseline (always-on at 70% HVAC, no storage/shedding)
 	baselineKW := 0.7*b.MaxHVACPower + b.ProcessDemand
 	baselineEnergy := baselineKW * StepDurationHrs
-		b.BaselineCost += baselineEnergy * b.CurrentPrice
-		b.BaselineCarbon += baselineEnergy * b.CarbonIntensity
+	b.BaselineCost += baselineEnergy * b.CurrentPrice
+	b.BaselineCarbon += baselineEnergy * b.CarbonIntensity
 
-		// ----- Reward computation -----
+	// ----- Reward computation -----
 	rc := ComputeReward(ComputeRewardInput{
-		B:               b,
-		Act:             act,
-		StepCost:        stepCost,
-		EnergyKWh:       energyKWh,
-		TMin:            TMinDefault,
-		TMax:            TMaxDefault,
-		StepCarbon:      stepCarbon,
-		BatchMissed:     len(batchMissed),
-		GridStress:      b.GridStressSignal,
-		ShedFraction:    clampedShed,
-		TaskID:          e.taskID,
-		PrevHVACLevel:   b.PrevHVACLevel,
-		ChargeRate:      act.ThermalChargeRate,
-		PrevChargeRate:  e.prevChargeRates[idx],
-		StorageDelta:    act.ThermalChargeRate,
-		PriceCurve:      e.PriceCurve[:],
-		CurrentStep:     s,
+		B:              b,
+		Act:            act,
+		StepCost:       stepCost,
+		EnergyKWh:      energyKWh,
+		TMin:           TMinDefault,
+		TMax:           TMaxDefault,
+		StepCarbon:     stepCarbon,
+		BatchMissed:    len(batchMissed),
+		GridStress:     b.GridStressSignal,
+		ShedFraction:   clampedShed,
+		TaskID:         e.taskID,
+		PrevHVACLevel:  b.PrevHVACLevel,
+		ChargeRate:     act.ThermalChargeRate,
+		PrevChargeRate: e.prevChargeRates[idx],
+		StorageDelta:   act.ThermalChargeRate,
+		PriceCurve:     e.PriceCurve[:],
+		CurrentStep:    s,
 	})
 	b.PrevHVACLevel = act.HVACPowerLevel
 	e.prevChargeRates[idx] = act.ThermalChargeRate
@@ -530,7 +530,7 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 	}
 }
 
-func (e *Environment) updateGridStress(b *BuildingState, s int) float64 {
+func (e *Environment) updateGridStress(s int) float64 {
 	// Grid stress is elevated during price peaks and stochastic demand spikes
 	price := e.PriceCurve[s]
 	priceNorm := (price - 0.04) / (0.32 - 0.04)
@@ -551,7 +551,7 @@ func (e *Environment) updateGridStress(b *BuildingState, s int) float64 {
 	return math.Max(0, stress)
 }
 
-func (e *Environment) updateOutdoorTemp(b *BuildingState, s int) float64 {
+func (e *Environment) updateOutdoorTemp(s int) float64 {
 	// Sinusoidal daily temperature cycle + noise
 	hour := float64(s) / 4.0
 	baseTemp := 15.0 + 8.0*math.Sin(2*math.Pi*(hour-6)/24.0)
@@ -559,7 +559,7 @@ func (e *Environment) updateOutdoorTemp(b *BuildingState, s int) float64 {
 	return baseTemp + noise
 }
 
-func (e *Environment) updateProcessDemand(b *BuildingState, s int) float64 {
+func (e *Environment) updateProcessDemand(s int) float64 {
 	// Process demand shifts with business hours
 	hour := s / 4
 	base := 10.0
