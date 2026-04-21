@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"gridmind-rl/env"
+
+	"github.com/gorilla/websocket"
 )
 
 // ──────────────────────────────────────────────
@@ -132,6 +134,10 @@ type Server struct {
 	envMgr *env.Environment
 }
 
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
 func newServer() *Server {
 	return &Server{envMgr: env.NewEnvironment()}
 }
@@ -148,6 +154,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/grade", s.handleGrade)
 	mux.HandleFunc("/tasks", s.handleTasks)
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/ws", s.handleWebSocket)
 	// Reverse proxy for dashboard (runs on port 7861 internally)
 	mux.HandleFunc("/dashboard", s.handleDashboardProxy)
 	mux.HandleFunc("/dashboard/", s.handleDashboardProxy)
@@ -442,6 +449,325 @@ func getClientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return ip
+}
+
+// ── /ws (WebSocket) ───────────────────────────────────────────────────────────
+
+type WSMessage struct {
+	Type  string          `json:"type"`
+	Data  json.RawMessage `json:"data,omitempty"`
+	Seed  *int64         `json:"seed,omitempty"`
+	TaskID int            `json:"task_id,omitempty"`
+}
+
+type WSResetMessage struct {
+	Seed        *int64 `json:"seed,omitempty"`
+	TaskID      int    `json:"task_id,omitempty"`
+	NumBuildings int    `json:"num_buildings,omitempty"`
+}
+
+type WSStepMessage struct {
+	Action json.RawMessage `json:"action"`
+}
+
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	for {
+		// Read message from client
+		_, msgBytes, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error: %v", err)
+			}
+			break
+		}
+
+		var msg WSMessage
+		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+			errMsg, _ := json.Marshal(map[string]string{"error": "invalid message format"})
+			conn.WriteMessage(websocket.TextMessage, errMsg)
+			continue
+		}
+
+		switch msg.Type {
+		case "reset":
+			// GenericEnvClient sends: {"type": "reset", "data": {"seed": 42}}
+			// We need to handle data payload if present
+			if len(msg.Data) > 0 {
+				s.handleWSReset(conn, msg.Data)
+			} else {
+				// Fallback to top-level fields (seed, task_id)
+				s.handleWSResetDirect(conn, msg.Seed, msg.TaskID)
+			}
+		case "step":
+			// GenericEnvClient sends: {"type": "step", "data": {"action": {...}}}
+			if len(msg.Data) > 0 {
+				s.handleWSStep(conn, msg.Data)
+			} else {
+				// Fallback to top-level action
+				s.handleWSStepDirect(conn, msgBytes)
+			}
+		case "state":
+			s.handleWSState(conn)
+		case "close":
+			break
+		default:
+			errMsg, _ := json.Marshal(map[string]string{"error": "unknown message type: " + msg.Type})
+			conn.WriteMessage(websocket.TextMessage, errMsg)
+		}
+	}
+}
+
+func (s *Server) handleWSReset(conn *websocket.Conn, data json.RawMessage) {
+	// GenericEnvClient sends: {"data": {"seed": 42}}
+	// Or: {"data": {"task_id": 1, "seed": 42}}
+	var reqData map[string]interface{}
+	if err := json.Unmarshal(data, &reqData); err != nil {
+		errMsg, _ := json.Marshal(map[string]string{"error": "invalid reset data: " + err.Error()})
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		return
+	}
+
+	var seed *int64
+	if seedVal, ok := reqData["seed"].(float64); ok {
+		s := int64(seedVal)
+		seed = &s
+	} else if seedVal, ok := reqData["seed"].(int64); ok {
+		seed = &seedVal
+	} else if seedVal, ok := reqData["seed"].(int); ok {
+		s := int64(seedVal)
+		seed = &s
+	}
+
+	taskID := 1
+	if taskIDVal, ok := reqData["task_id"].(float64); ok {
+		taskID = int(taskIDVal)
+	} else if taskIDVal, ok := reqData["task_id"].(int64); ok {
+		taskID = int(taskIDVal)
+	} else if taskIDVal, ok := reqData["task_id"].(int); ok {
+		taskID = taskIDVal
+	}
+
+	numBuildings := 1
+	if nbVal, ok := reqData["num_buildings"].(float64); ok {
+		numBuildings = int(nbVal)
+	} else if nbVal, ok := reqData["num_buildings"].(int64); ok {
+		numBuildings = int(nbVal)
+	} else if nbVal, ok := reqData["num_buildings"].(int); ok {
+		numBuildings = nbVal
+	}
+
+	resp := s.envMgr.Reset(env.ResetRequest{
+		Seed:         seed,
+		TaskID:       taskID,
+		NumBuildings: numBuildings,
+	})
+
+	// Build observation response
+	obs := resp.Observations[0]
+	respData := map[string]interface{}{
+		"observation": map[string]interface{}{
+			"indoor_temperature":    obs.IndoorTemperature,
+			"thermal_storage_level": obs.ThermalStorageLevel,
+			"process_demand":        obs.ProcessDemand,
+			"current_price":         obs.CurrentPrice,
+			"grid_stress_signal":   obs.GridStressSignal,
+			"carbon_intensity":     obs.CarbonIntensity,
+			"hour_of_day":          obs.HourOfDay,
+			"batch_queue":          obs.BatchQueue,
+			"cumulative_cost":      obs.CumulativeCost,
+			"step":                 obs.Step,
+			"building_id":          obs.BuildingID,
+		},
+		"reward": nil,
+		"done":   false,
+		"info":   map[string]interface{}{"episode": resp.Episode, "task_id": resp.TaskID},
+	}
+
+	// Wrap in "data" field for GenericEnvClient compatibility
+	response := map[string]interface{}{
+		"data": respData,
+	}
+
+	respBytes, _ := json.Marshal(response)
+	conn.WriteMessage(websocket.TextMessage, respBytes)
+}
+
+func (s *Server) handleWSStep(conn *websocket.Conn, data json.RawMessage) {
+	// GenericEnvClient sends action directly in data: {"data": {...action fields...}}
+	var reqData map[string]interface{}
+	if err := json.Unmarshal(data, &reqData); err != nil {
+		errMsg, _ := json.Marshal(map[string]string{"error": "invalid step data: " + err.Error()})
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		return
+	}
+
+	// Handle two formats:
+	// 1. Direct action: {"data": {"hvac_power_level": 0.5, ...}}
+	// 2. Wrapped action: {"data": {"action": {"hvac_power_level": 0.5, ...}}}
+	var actionBytes []byte
+	if actionData, ok := reqData["action"]; ok {
+		// Wrapped format
+		actionBytes, _ = json.Marshal(actionData)
+	} else {
+		// Direct format - use the whole reqData as action
+		actionBytes = data
+	}
+
+	var action env.ActionModel
+	if err := json.Unmarshal(actionBytes, &action); err != nil {
+		errMsg, _ := json.Marshal(map[string]string{"error": "invalid action: " + err.Error()})
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		return
+	}
+
+	responses, done := s.envMgr.Step([]env.ActionModel{action})
+
+	// Record metrics
+	if len(responses) > 0 {
+		metrics.recordStep(0, responses[0].Reward)
+		metrics.recordAction(action.HVACPowerLevel)
+	}
+
+	obs := responses[0]
+	respData := map[string]interface{}{
+		"observation": map[string]interface{}{
+			"indoor_temperature":    obs.Observation.IndoorTemperature,
+			"thermal_storage_level": obs.Observation.ThermalStorageLevel,
+			"process_demand":        obs.Observation.ProcessDemand,
+			"current_price":         obs.Observation.CurrentPrice,
+			"grid_stress_signal":   obs.Observation.GridStressSignal,
+			"carbon_intensity":     obs.Observation.CarbonIntensity,
+			"hour_of_day":          obs.Observation.HourOfDay,
+			"batch_queue":          obs.Observation.BatchQueue,
+			"cumulative_cost":      obs.Observation.CumulativeCost,
+			"step":                 obs.Observation.Step,
+			"building_id":          obs.Observation.BuildingID,
+		},
+		"reward": obs.Reward,
+		"done":   done,
+		"info":   obs.Info,
+	}
+	response := map[string]interface{}{"data": respData}
+
+	respBytes, _ := json.Marshal(response)
+	conn.WriteMessage(websocket.TextMessage, respBytes)
+}
+
+func (s *Server) handleWSState(conn *websocket.Conn) {
+	state := s.envMgr.GetState()
+	stateBytes, _ := json.Marshal(state)
+	conn.WriteMessage(websocket.TextMessage, stateBytes)
+}
+
+// Direct handlers for OpenEnv client format (action at top level)
+
+func (s *Server) handleWSResetDirect(conn *websocket.Conn, seed *int64, taskID int) {
+	if seed == nil {
+		var s int64 = 42
+		seed = &s
+	}
+	if taskID == 0 {
+		taskID = 1
+	}
+
+	resp := s.envMgr.Reset(env.ResetRequest{
+		Seed:        seed,
+		TaskID:      taskID,
+		NumBuildings: 1,
+	})
+
+	obs := resp.Observations[0]
+	respData := map[string]interface{}{
+		"observation": map[string]interface{}{
+			"indoor_temperature":    obs.IndoorTemperature,
+			"thermal_storage_level": obs.ThermalStorageLevel,
+			"process_demand":        obs.ProcessDemand,
+			"current_price":         obs.CurrentPrice,
+			"grid_stress_signal":   obs.GridStressSignal,
+			"carbon_intensity":     obs.CarbonIntensity,
+			"hour_of_day":          obs.HourOfDay,
+			"batch_queue":          obs.BatchQueue,
+			"cumulative_cost":      obs.CumulativeCost,
+			"step":                 obs.Step,
+			"building_id":          obs.BuildingID,
+		},
+		"reward": nil,
+		"done":   false,
+		"info":   map[string]interface{}{"episode": resp.Episode, "task_id": resp.TaskID},
+	}
+	response := map[string]interface{}{"data": respData}
+
+	respBytes, _ := json.Marshal(response)
+	conn.WriteMessage(websocket.TextMessage, respBytes)
+}
+
+func (s *Server) handleWSStepDirect(conn *websocket.Conn, msgBytes []byte) {
+	// Parse the original message to get action directly
+	var rawMsg map[string]interface{}
+	if err := json.Unmarshal(msgBytes, &rawMsg); err != nil {
+		errMsg, _ := json.Marshal(map[string]string{"error": "invalid step message: " + err.Error()})
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		return
+	}
+
+	actionData, ok := rawMsg["action"]
+	if !ok {
+		errMsg, _ := json.Marshal(map[string]string{"error": "missing action field"})
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		return
+	}
+
+	actionBytes, err := json.Marshal(actionData)
+	if err != nil {
+		errMsg, _ := json.Marshal(map[string]string{"error": "invalid action format"})
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		return
+	}
+
+	var action env.ActionModel
+	if err := json.Unmarshal(actionBytes, &action); err != nil {
+		errMsg, _ := json.Marshal(map[string]string{"error": "invalid action: " + err.Error()})
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		return
+	}
+
+	responses, done := s.envMgr.Step([]env.ActionModel{action})
+
+	if len(responses) > 0 {
+		metrics.recordStep(0, responses[0].Reward)
+		metrics.recordAction(action.HVACPowerLevel)
+	}
+
+	obs := responses[0]
+	respData := map[string]interface{}{
+		"observation": map[string]interface{}{
+			"indoor_temperature":    obs.Observation.IndoorTemperature,
+			"thermal_storage_level": obs.Observation.ThermalStorageLevel,
+			"process_demand":        obs.Observation.ProcessDemand,
+			"current_price":         obs.Observation.CurrentPrice,
+			"grid_stress_signal":   obs.Observation.GridStressSignal,
+			"carbon_intensity":     obs.Observation.CarbonIntensity,
+			"hour_of_day":          obs.Observation.HourOfDay,
+			"batch_queue":          obs.Observation.BatchQueue,
+			"cumulative_cost":      obs.Observation.CumulativeCost,
+			"step":                 obs.Observation.Step,
+			"building_id":          obs.Observation.BuildingID,
+		},
+		"reward": obs.Reward,
+		"done":   done,
+		"info":   obs.Info,
+	}
+	response := map[string]interface{}{"data": respData}
+
+	respBytes, _ := json.Marshal(response)
+	conn.WriteMessage(websocket.TextMessage, respBytes)
 }
 
 // ──────────────────────────────────────────────
