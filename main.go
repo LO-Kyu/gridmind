@@ -516,7 +516,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case "state":
 			s.handleWSState(conn)
 		case "close":
-			break
+			return
 		default:
 			errMsg, _ := json.Marshal(map[string]string{"error": "unknown message type: " + msg.Type})
 			conn.WriteMessage(websocket.TextMessage, errMsg)
