@@ -6,3 +6,12 @@ requests>=2.31.0
 httpx>=0.24.0
 pytest>=7.0.0
 python-dotenv>=1.0.0
+
+# Track 1 - Training dependencies
+torch>=2.1.0
+unsloth[colab-new]>=2024.11
+trl>=0.12.0
+pandas>=2.0.0
+datasets>=2.18.0
+nest_asyncio>=1.6.0
+matplotlib>=3.8.0

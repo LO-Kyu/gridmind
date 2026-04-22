@@ -4,7 +4,7 @@ description: |
   GridMind-RL: Industrial Load-Shaping and Demand-Response Environment.
   An RL environment simulating a real-world building energy management system.
   Control HVAC, thermal storage, and schedule batch jobs in response to
-  stochastic time-of-use prices and grid stress events.
+  stochastic electricity prices, grid stress events, and natural language objectives.
 
 author: LOKyu Team
 tags:
@@ -67,6 +67,33 @@ schemas:
       building_id:
         type: integer
         description: Building identifier for multi-building federation
+      hvac_efficiency:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        description: "Current HVAC efficiency multiplier (1.0=new, degrades over episode). Track 5."
+      active_faults:
+        type: array
+        items:
+          type: string
+        description: "Human-readable list of active fault alarm strings. Empty when no faults. Track 3."
+      instruction_card:
+        type: [object, "null"]
+        description: "Natural language objective card. Only populated when task_id=4. Track 2."
+        properties:
+          text:
+            type: string
+            description: "Human-readable instruction for the episode."
+          targets:
+            type: object
+            description: "Machine-readable KPI targets keyed by metric name."
+            additionalProperties:
+              type: number
+          weights:
+            type: object
+            description: "Scoring weights for each KPI target."
+            additionalProperties:
+              type: number
 
   action:
     type: object
@@ -106,6 +133,180 @@ schemas:
     type: number
     description: Dense multi-component reward (cost, optional temperature/grid/carbon/deadlines) task-gated to match objectives.
 
+  reset_request:
+    type: object
+    properties:
+      seed:
+        type: integer
+        description: Optional random seed for reproducibility
+      task_id:
+        type: integer
+        minimum: 1
+        maximum: 4
+        description: "Task ID (1-4): 1=cost, 2=temp, 3=demand_response, 4=instruction_following"
+      difficulty:
+        type: string
+        enum: ["easy", "medium", "hard"]
+        description: Task difficulty override
+      num_buildings:
+        type: integer
+        minimum: 1
+        maximum: 3
+        description: Number of buildings in federation for multi-agent demo
+
+  reset_response:
+    type: object
+    properties:
+      observations:
+        type: array
+        items:
+          $ref: "#/schemas/observation"
+      episode:
+        type: integer
+        description: Current episode number
+      task_id:
+        type: integer
+        description: Task ID for this episode
+      seed:
+        type: integer
+        description: Random seed used
+      instruction_card:
+        $ref: "#/schemas/observation/properties/instruction_card"
+
+  step_request:
+    type: [object, array]
+    description: Single action object or array of actions for multi-building
+    items:
+      $ref: "#/schemas/action"
+
+  step_response:
+    type: object
+    properties:
+      observation:
+        $ref: "#/schemas/observation"
+      reward:
+        type: number
+        description: Total reward for this step
+      done:
+        type: boolean
+        description: Episode complete flag
+      info:
+        type: object
+        properties:
+          reward_components:
+            type: object
+            properties:
+              cost_savings:
+                type: number
+              temp_constraint:
+                type: number
+              grid_response:
+                type: number
+              deadline_penalty:
+                type: number
+              efficiency_bonus:
+                type: number
+              stability_penalty:
+                type: number
+              carbon_reward:
+                type: number
+              instruction_reward:
+                type: number
+              fault_mitigation:
+                type: number
+              total:
+                type: number
+          energy_used_kwh:
+            type: number
+          carbon_emitted_gco2:
+            type: number
+          price_signal:
+            type: number
+          grid_stress:
+            type: number
+          batch_completed:
+            type: array
+            items:
+              type: integer
+          batch_missed:
+            type: array
+            items:
+              type: integer
+          episode:
+            type: integer
+          step:
+            type: integer
+
+  feeder_state:
+    type: object
+    properties:
+      total_demand_kw:
+        type: number
+        description: Total fleet demand in kW
+      feeder_limit_kw:
+        type: number
+        description: Feeder capacity limit
+      feeder_overload:
+        type: boolean
+        description: Whether total demand exceeds limit
+      utilization_pct:
+        type: number
+        description: Utilization percentage
+      buildings:
+        type: array
+        items:
+          type: object
+          properties:
+            building_id:
+              type: integer
+            current_demand_kw:
+              type: number
+            indoor_temperature:
+              type: number
+            thermal_storage_level:
+              type: number
+            cumulative_cost:
+              type: number
+            grid_stress_signal:
+              type: number
+            price_multiplier:
+              type: number
+      price_curve_hourly:
+        type: array
+        items:
+          type: number
+        description: 24-point hourly price curve
+      step:
+        type: integer
+      episode:
+        type: integer
+
+  coordinate_request:
+    type: object
+    properties:
+      price_multipliers:
+        type: array
+        items:
+          type: number
+        description: Per-building price multipliers (default 1.0)
+
+  simulate_request:
+    type: array
+    items:
+      $ref: "#/schemas/action"
+    description: Array of actions to simulate
+
+  simulate_response:
+    type: object
+    properties:
+      results:
+        type: array
+        items:
+          $ref: "#/schemas/step_response"
+      done:
+        type: boolean
+        description: Whether episode would be done after simulated step
+
 tasks:
   - id: 1
     name: "Cost Minimization"
@@ -130,33 +331,130 @@ tasks:
       grid_response: 0.20
       batch_deadline: 0.12
       carbon: 0.20
+  - id: 4
+    name: "Instruction-Following Operator"
+    description: "Complete a randomly sampled natural-language objective card specifying KPI targets for cost, temperature, and carbon over 24h."
+    difficulty: "hard"
+    weights:
+      task_completion: 0.50
+      cost: 0.30
+      temperature: 0.20
 
 endpoints:
   health:
     path: /health
     method: GET
+    description: Health check - returns {"status": "ok", "version": "1.0.0"}
   ping:
     path: /ping
     method: GET
+    description: Liveness probe - returns {"status": "ok"}
   reset:
     path: /reset
     method: POST
+    description: Start new episode
+    request_schema: "#/schemas/reset_request"
+    response_schema: "#/schemas/reset_response"
   step:
     path: /step
     method: POST
+    description: Execute action in environment
+    request_schema: "#/schemas/step_request"
+    response_schema: "#/schemas/step_response"
   state:
     path: /state
     method: GET
+    description: Get current environment state
+    response_schema:
+      type: object
+      properties:
+        buildings:
+          type: array
+          items:
+            type: object
+        price_curve_episode:
+          type: array
+          items:
+            type: number
+        carbon_curve_episode:
+          type: array
+          items:
+            type: number
+        episode:
+          type: integer
+        step:
+          type: integer
+        task_id:
+          type: integer
+        done:
+          type: boolean
+        seed:
+          type: integer
   grade:
     path: /grade
     method: GET
+    description: Grade completed episode
+    response_schema:
+      type: object
+      properties:
+        task_id:
+          type: integer
+        score:
+          type: number
+        sub_scores:
+          type: object
+        exploit_detected:
+          type: boolean
+        penalty_applied:
+          type: number
   replay:
     path: /replay
     method: GET
+    description: Get episode replay data
+    response_schema:
+      type: object
+      properties:
+        replay:
+          type: array
+        steps:
+          type: integer
   tasks:
     path: /tasks
     method: GET
+    description: List available tasks
+    response_schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: integer
+          name:
+            type: string
+          description:
+            type: string
+          difficulty:
+            type: string
+          weights:
+            type: object
   metrics:
     path: /metrics
     method: GET
-
+    description: Prometheus metrics
+    response_content_type: text/plain
+  feeder:
+    path: /feeder
+    method: GET
+    description: Get aggregate fleet state for coordinator
+    response_schema: "#/schemas/feeder_state"
+  coordinate:
+    path: /coordinate
+    method: POST
+    description: Set per-building price multipliers from coordinator
+    request_schema: "#/schemas/coordinate_request"
+  simulate:
+    path: /simulate
+    method: POST
+    description: Simulate world model prediction without advancing environment
+    request_schema: "#/schemas/simulate_request"
+    response_schema: "#/schemas/simulate_response"

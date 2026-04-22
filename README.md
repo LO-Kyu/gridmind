@@ -9,9 +9,7 @@ pinned: false
 license: mit
 ---
 
-# GridMind-RL
-
-**Industrial building energy management reinforcement learning environment**
+# GridMind-RL — Train LLMs to manage industrial buildings under faults, grid stress, and natural language objectives.
 
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-Compatible-blue)](https://openenv.org/)
 [![Go 1.21](https://img.shields.io/badge/Go-1.21-00ADD8)](https://golang.org/)
@@ -21,7 +19,7 @@ license: mit
 
 ---
 
-## 🚀 Live Demo
+## Live Demo
 
 | | URL |
 |--|-----|
@@ -34,25 +32,151 @@ curl https://lo-kyu-gridmind.hf.space/health
 curl https://lo-kyu-gridmind.hf.space/tasks
 ```
 
-## Overview
+---
 
-GridMind-RL is a reinforcement learning environment for training and evaluating intelligent control policies in industrial building energy management. The environment simulates realistic HVAC control, thermal storage management, batch job scheduling, and demand response scenarios under stochastic electricity pricing and grid stress events.
+## Problem
 
-**Key challenges solved by the environment:**
-- **Cost minimization**: Navigate complex electricity pricing curves across 24-hour periods
-- **Comfort maintenance**: Keep indoor temperature within comfort bounds while optimizing cost
-- **Grid responsiveness**: Respond to grid stress signals with intelligent load shedding
-- **Carbon reduction**: Minimize grid carbon intensity through demand response
-- **Batch scheduling**: Schedule compute-intensive batch jobs optimally
-- **Storage management**: Efficiently use thermal storage for load shifting
+Industrial buildings consume ~40% of global electricity, yet most still use naive "always-on" HVAC policies. The capability gap is clear: **LLMs can understand complex pricing curves, natural language instructions, and fault alerts—but no environment exists to train them to manage buildings.**
 
-This environment is ideal for training deep reinforcement learning agents, testing heuristic policies, and benchmarking control algorithms. It provides dense reward signals enabling efficient policy learning.
+GridMind-RL closes this gap by simulating a complete building energy system where agents must:
+- Navigate 24-hour price volatility (off-peak vs peak: 4¢ to 32¢/kWh)
+- Maintain comfort (19-23°C) while minimizing cost
+- Respond to grid stress emergencies
+- Handle equipment faults (chiller failure, sensor malfunction, grid outages)
+- Parse and follow natural language objective cards
+
+---
+
+## Environment
+
+| | Description |
+|---|-------------|
+| **Observation** | 11 fields: temperature, storage, price, stress, carbon, faults, HVAC efficiency |
+| **Actions** | HVAC level (0-1), thermal charge (-1 to 1), batch slot (0-4), load shed (0-0.5) |
+| **Reward** | 9-component weighted sum: cost, temperature, grid, deadline, efficiency, stability, carbon, instruction, fault_mitigation |
+| **Episode** | 96 steps = 24 simulated hours @ 15-min resolution |
+| **Tasks** | 4 tasks: (1) cost, (2) temperature, (3) demand_response, (4) instruction_following |
+
+### Observation Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| indoor_temperature | float | °C |
+| thermal_storage_level | float | 0-1 (0=empty, 1=full) |
+| current_price | float | $/kWh |
+| grid_stress_signal | float | 0-1 (>0.7 = critical) |
+| hvac_efficiency | float | 1.0 → degrades to 0.5 over episode |
+| active_faults | string[] | Active fault alarm strings |
+| instruction_card | object | Task 4 objective only |
+
+### Action Fields
+
+| Field | Type | Range |
+|-------|------|-------|
+| hvac_power_level | float | 0.0-1.0 |
+| thermal_charge_rate | float | -1.0 to 1.0 |
+| batch_job_slot | int | 0-4 |
+| load_shed_fraction | float | 0.0-0.5 |
+
+---
+
+## Five Tracks
+
+### Track 1: Multi-Agent Interactions
+A single oversight LLM coordinates multiple buildings through price signals. The coordinator reads `/feeder` to see fleet-wide demand, then sets per-building price multipliers via `/coordinate` to orchestrate behavior.
+
+### Track 2: Long-Horizon Planning & Instruction Following
+Task 4 presents a natural language objective card like "Keep total energy cost under $2.50 while maintaining 19-23°C". Agents must plan across all 96 steps—not greedy per-step control.
+
+### Track 3: World Modeling
+The `/simulate` endpoint lets agents ask "what if?" before acting. When HVAC efficiency is low or faults are active, the agent simulates the proposed action and revises if the predicted reward is poor.
+
+### Track 4: Fault Handling (Wild Card)
+Four fault types inject unpredictability:
+- **Chiller failure**: HVAC drops to 20% capacity
+- **Grid outage**: Price ×3, stress = 1.0
+- **Sensor fault**: Temperature readings jitter ±5°C
+- **Tariff spike**: Emergency 4× price surge
+
+### Track 5: HVAC Degradation
+Real HVAC systems degrade over time. Efficiency starts at 1.0 and drops ~0.1% per step. The agent must account for declining capacity—a hidden state requiring inference.
+
+---
+
+## Results
+
+![Training Curve](results/training_curve.png)
+*Episode reward vs training step. Fine-tuned Qwen2.5-0.5B vs zero-shot baseline.*
+
+| Policy | Task 1 | Task 2 | Task 3 | Task 4 |
+|--------|--------|--------|--------|--------|
+| Heuristic | 0.708 | 0.633 | 0.598 | — |
+| Zero-shot LLM | 0.715 | 0.645 | 0.610 | 0.582 |
+| Fine-tuned LLM | — | — | — | — |
+
+*Note: Fine-tuning scores will be populated after the first training run.*
+
+---
+
+## How to Run
+
+### Start the environment server
+```bash
+go run main.go
+```
+
+### Run the LLM agent (task 1-4)
+```bash
+# Set up your API token
+cp .env.example .env
+# Edit .env with HF_TOKEN
+
+# Task 1: Cost minimization
+python inference.py --task 1 --episodes 5
+
+# Task 2: Temperature management  
+python inference.py --task 2 --episodes 5
+
+# Task 3: Full demand response
+python inference.py --task 3 --episodes 5
+
+# Task 4: Instruction following
+python inference.py --task 4 --episodes 5
+
+# Heuristic baseline (fast, no LLM)
+python inference.py --fast-mode --task 3 --episodes 5
+```
+
+### Run multi-building coordinator demo
+```bash
+python scripts/multi_building_demo.py
+```
+
+### Run training (requires GPU)
+```bash
+python scripts/train_unsloth.py --steps 500 --output-csv results/training_log.csv
+```
+
+### Generate training curve plot
+```bash
+python scripts/plot_results.py
+```
+
+---
+
+## Self-Improvement: Curriculum Learning
+
+The `--curriculum` flag enables automatic task progression:
+- Agent starts on Task 1 (easy)
+- After 5 episodes with average reward ≥ 0.55, advances to Task 2
+- After 5 episodes with average reward ≥ 0.50, advances to Task 3
+- After 5 episodes with average reward ≥ 0.45, advances to Task 4
+
+This directly targets the Self-Improvement hackathon theme.
 
 ---
 
 ## Architecture
-
-GridMind-RL consists of three tightly integrated components:
 
 ```
 Agent (python/inference.py)
@@ -69,196 +193,26 @@ Web Dashboard (dashboard/server.py) → Port 7861
 - **Separation of concerns**: Physics engine (Go) decoupled from policy layer (Python)
 - **OpenEnv compliance**: Standardized REST API enables any language agent
 - **Deterministic simulation**: Seeded RNG for reproducible experiments
-- **Dense rewards**: 7-component reward for effective learning
-
----
-
-## Environment Specification
-
-### Observation Space (11 fields)
-
-| Field | Type | Range | Description |
-|-------|------|-------|-------------|
-| `indoor_temperature` | float | [15-27] °C | Building indoor temperature |
-| `thermal_storage_level` | float | [0-1] | Thermal storage charge (0=empty, 1=full) |
-| `process_demand` | float | [5-50] kW | Baseline demand |
-| `current_price` | float | [0.03-0.25] $/kWh | Electricity price |
-| `grid_stress_signal` | float | [0-1] | Grid stress (>0.7 = critical) |
-| `carbon_intensity` | float | [50-800] gCO2/kWh | Grid carbon intensity |
-| `hour_of_day` | int | [0-23] | Time of day |
-| `batch_queue` | list | Up to 10 items | Batch job deadlines |
-| `cumulative_cost` | float | [0-1000] $ | Total cost this episode |
-| `step` | int | [0-95] | Current step (96 steps = 24 hours) |
-| `building_id` | int | {0} | Building identifier |
-
-### Action Space (5 fields)
-
-| Field | Type | Range | Description |
-|-------|------|-------|-------------|
-| `hvac_power_level` | float | [0-1] | HVAC power (0=off, 1=max) |
-| `thermal_charge_rate` | float | [-1 to 1] | Storage charge/discharge rate |
-| `batch_job_slot` | int | [0 to 4] | Batch job scheduling slot |
-| `load_shed_fraction` | float | [0 to 0.5] | Load shedding fraction |
-| `building_id` | int | {0} | Building identifier |
-
-### Reward System
-
-#### Raw Reward Components (7 Components)
-
-| Component | Description |
-|-----------|-------------|
-| **Cost Savings** | Negative cost per energy consumed |
-| **Temperature Constraint** | Penalty if T outside [19-23]°C |
-| **Grid Response** | Bonus for load shedding during stress |
-| **Deadline Penalty** | Penalty for missed batch deadlines |
-| **Efficiency Bonus** | Bonus for off-peak charging |
-| **Stability Penalty** | Penalty for rapid control changes |
-| **Carbon Reward** | Bonus for low-carbon periods |
-
-#### Reward Normalization
-
-The inference script normalizes rewards to a standardized range for consistent scoring:
-
-| Metric | Range | Description |
-|--------|-------|-------------|
-| **Per-step reward** | [0.10, 0.90] | Worst action → 0.10, Best action → 0.90 |
-| **Episode score** | (0.01, 0.99) | Clamped to avoid exact 0.0 or 1.0 |
-
-**Normalization formula:**
-```
-normalized_reward = ((raw_reward - raw_min) / (raw_max - raw_min)) * 0.80 + 0.10
-episode_score = clamp(mean(normalized_rewards), 0.01, 0.99)
-```
-
-This ensures:
-- Scores are strictly between 0 and 1 (never exactly 0.0 or 1.0)
-- Relative performance matters more than absolute values
-- Fair comparison across different episodes and tasks
-
----
-
-## Output Format
-
-The inference script emits machine-parsed stdout for judge evaluation:
-
-```
-[START] task=<task_name> env=<benchmark> model=<model_name>
-[STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-[END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
-```
-
-**Rules:**
-- One `[START]` line at episode begin
-- One `[STEP]` line per step, immediately after `env.step()` returns
-- One `[END]` line after `env.close()`, always emitted (even on exception)
-- `reward` and `rewards` are formatted to 2 decimal places
-- `done` and `success` are lowercase booleans: `true` or `false`
-- `error` is the raw `last_action_error` string, or `null` if none
-
-**Example:**
-```
-[START] task=gridmind-task-1 env=gridmind model=Qwen2.5-7B-Instruct
-[STEP] step=1 action={"hvac_power_level":0.7,"thermal_charge_rate":0.5,...} reward=0.50 done=false error=null
-[STEP] step=2 action={"hvac_power_level":0.5,"thermal_charge_rate":-0.3,...} reward=0.83 done=false error=null
-[STEP] step=96 action={"hvac_power_level":0.3,"thermal_charge_rate":0.0,...} reward=0.90 done=true error=null
-[END] success=true steps=96 score=0.683 rewards=0.50,0.55,0.83,...,0.90
-```
-
----
-
-## Tasks
-
-| Task | Difficulty | Objective | Baseline Score |
-|------|-----------|-----------|----------------|
-| Task 1 | Easy | Minimize cost only | **0.708** |
-| Task 2 | Medium | Minimize cost + maintain comfort | **0.633** |
-| Task 3 | Hard | Full demand response + scheduling | **0.598** |
-
-**Task 1 (Easy)**: Cost minimization, no constraints  
-**Task 2 (Medium)**: Cost + temperature comfort (19-23°C)  
-**Task 3 (Hard)**: Cost + comfort + grid response + batch scheduling + carbon
-
----
-
-## Quickstart
-
-### Docker (Recommended)
-
-```bash
-docker build -t gridmind-rl .
-docker run -p 7860:7860 -p 7861:7861 gridmind-rl
-```
-
-### Local Development
-
-**Terminal 1: Start Go server**
-```bash
-go run main.go
-```
-
-**Terminal 2: Run agent**
-```bash
-# Copy and configure .env file
-cp .env.example .env
-# Edit .env with your API keys
-
-# Heuristic policy (no LLM, fastest)
-python inference.py --fast-mode --episodes 1
-
-# LLM agent (default: reuses action for 8 steps)
-python inference.py --episodes 1
-
-# LLM agent (custom reuse interval)
-python inference.py --llm-every 4 --episodes 1
-```
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `HF_TOKEN` | **Yes** | — | Hugging Face / LLM API token |
-| `API_BASE_URL` | No | `https://api-inference.huggingface.co/v1` | LLM endpoint |
-| `MODEL_NAME` | No | `Qwen/Qwen2.5-7B-Instruct` | Model identifier |
-| `ENV_URL` | No | `http://localhost:7860` | Environment server URL |
-
-**Example `.env` file:**
-```bash
-HF_TOKEN=hf_your_token_here
-API_BASE_URL=https://api-inference.huggingface.co/v1
-MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
-```
+- **Dense rewards**: 9-component reward for effective learning
 
 ---
 
 ## API Reference
 
-All endpoints on port 7860 (OpenEnv standard).
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/ping` | Liveness probe |
-| `POST` | `/reset` | Start new episode |
-| `POST` | `/step` | Take action step |
-| `GET` | `/state` | Get current state |
-| `GET` | `/grade` | Grade episode (0.0-1.0 score) |
-| `GET` | `/tasks` | Available tasks |
-| `GET` | `/metrics` | System metrics |
-| `GET` | `/replay` | Episode history |
-
----
-
-## Baseline Performance
-
-Reference heuristic policy scores (rule-based, deterministic):
-
-| Task | Score | Policy |
-|------|-------|--------|
-| Task 1 | 0.708 | Simple load-shifting heuristic |
-| Task 2 | 0.633 | Temperature-aware heuristic |
-| Task 3 | 0.598 | Full demand response heuristic |
-
-LLM and RL agents are expected to exceed these scores.
+| GET | /health | Health check |
+| GET | /ping | Liveness probe |
+| POST | /reset | Start new episode |
+| POST | /step | Take action step |
+| GET | /state | Get current state |
+| GET | /grade | Grade episode (0.0-1.0 score) |
+| GET | /tasks | Available tasks |
+| GET | /metrics | System metrics |
+| GET | /replay | Episode history |
+| GET | /feeder | Aggregate fleet state |
+| POST | /coordinate | Set price multipliers |
+| POST | /simulate | World model prediction |
 
 ---
 
@@ -266,50 +220,37 @@ LLM and RL agents are expected to exceed these scores.
 
 ```
 gridmind-rl/
-+-- main.go                    # HTTP server & OpenEnv API
-+-- inference.py               # Agent entry point (LLM + heuristic)
-+-- openenv.yaml               # OpenEnv spec
-+-- Dockerfile                 # Container build
-+-- env/
-    +-- environment.go         # Physics simulation
-    +-- models.go             # Data models
-    +-- rewards.go            # Reward computation
-    +-- tasks.go              # Task grading
-+-- server/
-    +-- app.py                # Server entry point
-+-- dashboard/
-    +-- server.py              # Web server (port 7861)
-    +-- static/               # Frontend assets
-+-- data/
-    +-- price_curves.json      # Price data
-    +-- generate_prices.py    # Price generator
-+-- tests/
-    +-- test_graders.py        # Python tests
-    +-- environment_test.go    # Go tests
-+-- baseline_scores.json       # Reference scores
-+-- .env.example               # Environment template
-+-- LICENSE                    # MIT License
+├── main.go                    # HTTP server & OpenEnv API
+├── inference.py              # Agent entry point (LLM + heuristic)
+├── openenv.yaml              # OpenEnv spec
+├── Dockerfile                # Container build
+├── env/
+│   ├── environment.go        # Physics simulation
+│   ├── models.go           # Data models
+│   ├── rewards.go         # Reward computation
+│   ├── tasks.go           # Task grading
+│   └── faults.go         # Fault injection
+├── scripts/
+│   ├── train_unsloth.py   # GRPO training
+│   ├── plot_results.py   # Training curve visualizer
+│   ├── multi_building_demo.py  # Fleet AI demo
+│   └── run_baseline.sh   # Baseline scorer
+├── dashboard/
+│   ├── server.py         # Web server (port 7861)
+│   └── static/           # Frontend assets
+├── results/              # Training outputs (generated)
+└── README.md
 ```
 
 ---
 
-## Development
+## Links
 
-### Running Tests
-
-```bash
-# Go tests
-go test ./tests/... -v
-
-# Python tests (requires server running on 7860)
-pytest tests/test_graders.py -v
-```
-
-### Rebuilding Price Data
-
-```bash
-python data/generate_prices.py
-```
+- 🤗 HuggingFace Space: [GridMind-RL](https://lo-kyu-gridmind.hf.space)
+- 📝 Blog Post: [LINK TO BE ADDED]
+- 🎥 Demo Video: [LINK TO BE ADDED]
+- 📊 Training Run: [LINK TO BE_ADDED]
+- GitHub: [https://github.com/LO-Kyu/gridmind](https://github.com/LO-Kyu/gridmind)
 
 ---
 

@@ -35,11 +35,14 @@ type Environment struct {
 	difficulty   string
 	numBuildings int
 
-	Buildings   []*BuildingState
-	PriceCurve  [EpisodeSteps]float64 // $/kWh for each step
-	CarbonCurve [EpisodeSteps]float64 // gCO2/kWh for each step
-	Replay      []ReplayEntry
-	LastActions []ActionModel
+	Buildings        []*BuildingState
+	PriceCurve       [EpisodeSteps]float64
+	CarbonCurve      [EpisodeSteps]float64
+	Replay           []ReplayEntry
+	LastActions      []ActionModel
+	InstructionCard  *InstructionCard // set for Task 4 episodes
+	FaultSchedule    *FaultSchedule   // randomised fault events for this episode
+	PriceMultipliers []float64        // per-building multipliers set by coordinator (default 1.0)
 
 	// History for dashboard rendering (per building)
 	TempHistory     [][]float64
@@ -49,8 +52,8 @@ type Environment struct {
 	RewardHistory   [][]RewardComponents
 
 	// Exploit detection counters
-	totalShedSteps     []int // steps where load_shed > 0.4
-	thermalCycleCounts []int // rapid thermal storage reversals
+	totalShedSteps     []int
+	thermalCycleCounts []int
 	prevChargeRates    []float64
 }
 
@@ -126,7 +129,7 @@ func (e *Environment) Reset(req ResetRequest) ResetResponse {
 	e.thermalCycleCounts = make([]int, e.numBuildings)
 	e.prevChargeRates = make([]float64, e.numBuildings)
 
-	for i := 0; i < e.numBuildings; i++ {
+	for i := range e.Buildings {
 		e.Buildings[i] = e.newBuildingState(i)
 		e.TempHistory[i] = make([]float64, 0, EpisodeSteps)
 		e.CostHistory[i] = make([]float64, 0, EpisodeSteps)
@@ -135,16 +138,32 @@ func (e *Environment) Reset(req ResetRequest) ResetResponse {
 		e.RewardHistory[i] = make([]RewardComponents, 0, EpisodeSteps)
 	}
 
+	// Initialise coordinator price multipliers to 1.0
+	e.PriceMultipliers = make([]float64, e.numBuildings)
+	for i := range e.PriceMultipliers {
+		e.PriceMultipliers[i] = 1.0
+	}
+
+	// Generate instruction card for Task 4
+	e.InstructionCard = nil
+	if e.taskID == 4 {
+		e.InstructionCard = GenerateInstructionCard(e.rng)
+	}
+
+	// Generate fault schedule for all tasks (probability varies by difficulty)
+	e.FaultSchedule = GenerateFaultSchedule(e.rng, e.difficulty)
+
 	obs := make([]ObservationModel, e.numBuildings)
 	for i, b := range e.Buildings {
 		obs[i] = e.buildObservation(b)
 	}
 
 	return ResetResponse{
-		Observations: obs,
-		Episode:      e.episode,
-		TaskID:       e.taskID,
-		Seed:         e.seed,
+		Observations:    obs,
+		Episode:         e.episode,
+		TaskID:          e.taskID,
+		Seed:            e.seed,
+		InstructionCard: e.InstructionCard,
 	}
 }
 
@@ -282,6 +301,8 @@ func (e *Environment) newBuildingState(id int) *BuildingState {
 		MaxHVACPower:        MaxHVACPowerKW,
 		MaxStorageCapacity:  MaxStorageKWh,
 		ThermalLossRate:     StorageLossRate,
+		HVACEfficiency:      1.0,
+		HVACDegradationRate: 0.0005 + e.rng.Float64()*0.001, // 0.05% to 0.15% per step
 	}
 
 	// Spawn batch jobs based on difficulty
@@ -384,12 +405,32 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 	s := e.step
 
 	// Update environmental signals from curves
-	b.CurrentPrice = e.PriceCurve[s]
+	b.CurrentPrice = e.PriceCurve[s] * e.PriceMultipliers[idx]
 	b.CarbonIntensity = e.CarbonCurve[s]
 	b.HourOfDay = (s / 4) % 24
 
-	// Stochastic grid stress events (more frequent in hard mode)
-	b.GridStressSignal = e.updateGridStress(s)
+	// Restore defaults before applying faults (allows recovery when fault ends)
+	b.MaxHVACPower = MaxHVACPowerKW
+
+	// Apply fault events for this step (modifies price, stress, HVAC capacity)
+	activeFaultDescs := ApplyFaults(b, e.FaultSchedule, s, e.rng)
+	_ = activeFaultDescs // stored for use in buildObservation via FaultSchedule.ActiveAt
+
+	// Stochastic grid stress events (more frequent in hard mode).
+	// Note: FaultGridOutage sets GridStressSignal=1.0 inside ApplyFaults.
+	// We only overwrite it from the stochastic model if no outage is active.
+	hasGridFault := false
+	if e.FaultSchedule != nil {
+		for _, f := range e.FaultSchedule.ActiveAt(s) {
+			if f.Type == FaultGridOutage {
+				hasGridFault = true
+				break
+			}
+		}
+	}
+	if !hasGridFault {
+		b.GridStressSignal = e.updateGridStress(s)
+	}
 
 	// Weather perturbation: outdoor temp drifts sinusoidally + noise
 	b.OutdoorTemperature = e.updateOutdoorTemp(s)
@@ -399,8 +440,11 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 
 	// ----- Apply actions -----
 
+	// 0. Degrade HVAC efficiency
+	b.HVACEfficiency = math.Max(0.5, b.HVACEfficiency-b.HVACDegradationRate)
+
 	// 1. HVAC: heats/cools building toward setpoint
-	hvacPower := act.HVACPowerLevel * b.MaxHVACPower // kW
+	hvacPower := act.HVACPowerLevel * b.MaxHVACPower * b.HVACEfficiency // kW
 
 	// 2. Thermal storage: charge or discharge
 	chargeKW := act.ThermalChargeRate * b.MaxHVACPower * 0.3 // max 30% of HVAC for storage
@@ -460,24 +504,31 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 	b.BaselineCarbon += baselineEnergy * b.CarbonIntensity
 
 	// ----- Reward computation -----
+	// Get active faults for fault mitigation reward
+	var activeFaults []FaultEvent
+	if e.FaultSchedule != nil {
+		activeFaults = e.FaultSchedule.ActiveAt(s)
+	}
 	rc := ComputeReward(ComputeRewardInput{
-		B:              b,
-		Act:            act,
-		StepCost:       stepCost,
-		EnergyKWh:      energyKWh,
-		TMin:           TMinDefault,
-		TMax:           TMaxDefault,
-		StepCarbon:     stepCarbon,
-		BatchMissed:    len(batchMissed),
-		GridStress:     b.GridStressSignal,
-		ShedFraction:   clampedShed,
-		TaskID:         e.taskID,
-		PrevHVACLevel:  b.PrevHVACLevel,
-		ChargeRate:     act.ThermalChargeRate,
-		PrevChargeRate: e.prevChargeRates[idx],
-		StorageDelta:   act.ThermalChargeRate,
-		PriceCurve:     e.PriceCurve[:],
-		CurrentStep:    s,
+		B:               b,
+		Act:             act,
+		StepCost:        stepCost,
+		EnergyKWh:       energyKWh,
+		TMin:            TMinDefault,
+		TMax:            TMaxDefault,
+		StepCarbon:      stepCarbon,
+		BatchMissed:     len(batchMissed),
+		GridStress:      b.GridStressSignal,
+		ShedFraction:    clampedShed,
+		TaskID:          e.taskID,
+		PrevHVACLevel:   b.PrevHVACLevel,
+		ChargeRate:      act.ThermalChargeRate,
+		PrevChargeRate:  e.prevChargeRates[idx],
+		StorageDelta:    act.ThermalChargeRate,
+		PriceCurve:      e.PriceCurve[:],
+		CurrentStep:     s,
+		InstructionCard: e.InstructionCard,
+		ActiveFaults:    activeFaults,
 	})
 	b.PrevHVACLevel = act.HVACPowerLevel
 	e.prevChargeRates[idx] = act.ThermalChargeRate
@@ -621,8 +672,19 @@ func (e *Environment) batchRunningPower(b *BuildingState) float64 {
 }
 
 func (e *Environment) buildObservation(b *BuildingState) ObservationModel {
+	// Collect active fault descriptions for this step
+	var activeFaults []string
+	if e.FaultSchedule != nil {
+		for _, f := range e.FaultSchedule.ActiveAt(b.Step) {
+			activeFaults = append(activeFaults, f.Description)
+		}
+	}
+
+	// Apply sensor fault noise to observation (not physics) - if sensor fault is active, agent sees wrong temp
+	reportedTemp := b.IndoorTemperature + b.TempObservationNoise
+
 	return ObservationModel{
-		IndoorTemperature:   math.Round(b.IndoorTemperature*100) / 100,
+		IndoorTemperature:   math.Round(reportedTemp*100) / 100,
 		ThermalStorageLevel: math.Round(b.ThermalStorageLevel*1000) / 1000,
 		ProcessDemand:       math.Round(b.ProcessDemand*100) / 100,
 		CurrentPrice:        math.Round(b.CurrentPrice*10000) / 10000,
@@ -633,6 +695,9 @@ func (e *Environment) buildObservation(b *BuildingState) ObservationModel {
 		CumulativeCost:      math.Round(b.CumulativeCost*10000) / 10000,
 		Step:                b.Step,
 		BuildingID:          b.BuildingID,
+		HVACEfficiency:      math.Round(b.HVACEfficiency*1000) / 1000,
+		InstructionCard:     e.InstructionCard,
+		ActiveFaults:        activeFaults,
 	}
 }
 
@@ -698,4 +763,116 @@ func (e *Environment) ExploitDetected(buildingIdx int) (bool, float64) {
 		penalty = math.Max(shedRatio-0.7, 0)*0.5 + math.Max(cycleRatio-0.4, 0)*0.3
 	}
 	return exploited, penalty
+}
+
+// GetFeederState returns the aggregate fleet view for the coordinator.
+func (e *Environment) GetFeederState() FeederState {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	var totalDemand float64
+	buildings := make([]BuildingSummary, len(e.Buildings))
+	for i, b := range e.Buildings {
+		demand := b.ProcessDemand + b.MaxHVACPower*b.PrevHVACLevel
+		totalDemand += demand
+		buildings[i] = BuildingSummary{
+			BuildingID:          b.BuildingID,
+			CurrentDemandKW:     math.Round(demand*100) / 100,
+			IndoorTemperature:   math.Round(b.IndoorTemperature*100) / 100,
+			ThermalStorageLevel: math.Round(b.ThermalStorageLevel*1000) / 1000,
+			CumulativeCost:      math.Round(b.CumulativeCost*100) / 100,
+			GridStressSignal:    math.Round(b.GridStressSignal*100) / 100,
+			PriceMultiplier:     e.PriceMultipliers[i],
+		}
+	}
+
+	limit := float64(120 * len(e.Buildings)) // Simplistic soft cap
+
+	// Downsample price curve to 24 hourly points
+	hourlyCurve := make([]float64, 24)
+	for h := 0; h < 24; h++ {
+		hourlyCurve[h] = e.PriceCurve[h*4]
+	}
+
+	return FeederState{
+		TotalDemandKW:    math.Round(totalDemand*100) / 100,
+		FeederLimitKW:    limit,
+		FeederOverload:   totalDemand > limit,
+		UtilizationPct:   math.Round((totalDemand/limit)*1000) / 10,
+		Buildings:        buildings,
+		PriceCurveHourly: hourlyCurve,
+		Step:             e.step,
+		Episode:          e.episode,
+	}
+}
+
+// SetCoordinatorSignals applies per-building price multipliers.
+func (e *Environment) SetCoordinatorSignals(multipliers []float64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, val := range multipliers {
+		if i < len(e.PriceMultipliers) {
+			e.PriceMultipliers[i] = math.Max(0.1, math.Min(10.0, val)) // Clamp safety
+		}
+	}
+}
+
+// cloneBuilding creates a deep copy of a BuildingState
+func cloneBuilding(b *BuildingState) *BuildingState {
+	c := *b
+	c.BatchQueue = make([]int, len(b.BatchQueue))
+	copy(c.BatchQueue, b.BatchQueue)
+	c.Jobs = make([]BatchJob, len(b.Jobs))
+	copy(c.Jobs, b.Jobs)
+	return &c
+}
+
+// SimulateStep predicts the next state and reward without modifying the actual environment.
+// It performs a deep copy of the required state, applies the actions, and returns the expected result.
+func (e *Environment) SimulateStep(actions []ActionModel) ([]StepResponse, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.done {
+		return nil, true
+	}
+
+	// Create a temporary mock environment for a single step
+	mock := &Environment{
+		rng:              rand.New(rand.NewSource(e.rng.Int63())), // local PRNG to not desync main
+		episode:          e.episode,
+		step:             e.step,
+		taskID:           e.taskID,
+		seed:             e.seed,
+		difficulty:       e.difficulty,
+		numBuildings:     e.numBuildings,
+		Buildings:        make([]*BuildingState, e.numBuildings),
+		PriceCurve:       e.PriceCurve,
+		CarbonCurve:      e.CarbonCurve,
+		InstructionCard:  e.InstructionCard,
+		FaultSchedule:    e.FaultSchedule,
+		PriceMultipliers: e.PriceMultipliers,
+		prevChargeRates:  make([]float64, len(e.prevChargeRates)),
+	}
+	copy(mock.prevChargeRates, e.prevChargeRates)
+
+	for i, b := range e.Buildings {
+		mock.Buildings[i] = cloneBuilding(b)
+	}
+
+	// Clamp and apply actions
+	mockActions := make([]ActionModel, len(actions))
+	copy(mockActions, actions)
+	for i := range mockActions {
+		mock.clampAction(&mockActions[i])
+	}
+
+	responses := make([]StepResponse, mock.numBuildings)
+	for i, b := range mock.Buildings {
+		act := mock.findAction(mockActions, i)
+		responses[i] = mock.stepBuilding(b, act, i)
+	}
+
+	mockDone := (mock.step + 1) >= EpisodeSteps
+	return responses, mockDone
 }

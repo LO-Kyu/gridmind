@@ -46,22 +46,36 @@ type BuildingState struct {
 	MaxHVACPower         float64    `json:"-"` // kW
 	MaxStorageCapacity   float64    `json:"-"` // kWh
 	ThermalLossRate      float64    `json:"-"` // fraction lost per step
-	BuildingID           int        `json:"-"` // which building in federation
+	BuildingID             int        `json:"-"` // which building in federation
+	HVACEfficiency       float64    `json:"hvac_efficiency"` // 1.0 = perfect, degrades over time
+	HVACDegradationRate  float64    `json:"-"` // e.g. 0.001 per step
+	TempObservationNoise float64    `json:"-"` // sensor fault noise added to obs only (not physics)
+	LoadShedFraction   float64    `json:"-"` // actual load shed fraction applied (for fault reward)
+}
+
+// InstructionCard carries a natural-language task objective for Task 4.
+type InstructionCard struct {
+	Text    string             `json:"text"`    // human-readable instruction sentence
+	Targets map[string]float64 `json:"targets"` // machine-readable KPI targets
+	Weights map[string]float64 `json:"weights"` // scoring weights for each target
 }
 
 // ObservationModel is the JSON-serializable observation returned on each step/state.
 type ObservationModel struct {
-	IndoorTemperature   float64 `json:"indoor_temperature"`
-	ThermalStorageLevel float64 `json:"thermal_storage_level"`
-	ProcessDemand       float64 `json:"process_demand"`
-	CurrentPrice        float64 `json:"current_price"`
-	GridStressSignal    float64 `json:"grid_stress_signal"`
-	CarbonIntensity     float64 `json:"carbon_intensity"`
-	HourOfDay           int     `json:"hour_of_day"`
-	BatchQueue          []int   `json:"batch_queue"`
-	CumulativeCost      float64 `json:"cumulative_cost"`
-	Step                int     `json:"step"`
-	BuildingID          int     `json:"building_id"`
+	IndoorTemperature   float64          `json:"indoor_temperature"`
+	ThermalStorageLevel float64          `json:"thermal_storage_level"`
+	ProcessDemand       float64          `json:"process_demand"`
+	CurrentPrice        float64          `json:"current_price"`
+	GridStressSignal    float64          `json:"grid_stress_signal"`
+	CarbonIntensity     float64          `json:"carbon_intensity"`
+	HourOfDay           int              `json:"hour_of_day"`
+	BatchQueue          []int            `json:"batch_queue"`
+	CumulativeCost      float64          `json:"cumulative_cost"`
+	Step                int              `json:"step"`
+	BuildingID          int              `json:"building_id"`
+	HVACEfficiency      float64          `json:"hvac_efficiency"`
+	InstructionCard     *InstructionCard `json:"instruction_card,omitempty"` // populated for Task 4 only
+	ActiveFaults        []string         `json:"active_faults,omitempty"`    // human-readable alarm strings for active faults
 }
 
 // ActionModel is the parsed agent action for a single step.
@@ -75,14 +89,16 @@ type ActionModel struct {
 
 // RewardComponents holds the individual components of the dense reward signal.
 type RewardComponents struct {
-	CostSavings      float64 `json:"cost_savings"`       // negative = expensive
-	TempConstraint   float64 `json:"temp_constraint"`    // positive = within bounds
-	GridResponse     float64 `json:"grid_response"`      // bonus for DR compliance
-	DeadlinePenalty  float64 `json:"deadline_penalty"`   // negative for missed jobs
-	EfficiencyBonus  float64 `json:"efficiency_bonus"`   // storage arbitrage
-	StabilityPenalty float64 `json:"stability_penalty"`  // HVAC oscillation penalty
-	CarbonReward     float64 `json:"carbon_reward"`      // low-carbon bonus
-	Total            float64 `json:"total"`
+	CostSavings        float64 `json:"cost_savings"`         // negative = expensive
+	TempConstraint   float64 `json:"temp_constraint"`     // positive = within bounds
+	GridResponse    float64 `json:"grid_response"`       // bonus for DR compliance
+	DeadlinePenalty  float64 `json:"deadline_penalty"`    // negative for missed jobs
+	EfficiencyBonus float64 `json:"efficiency_bonus"`    // storage arbitrage
+	StabilityPenalty float64 `json:"stability_penalty"`   // HVAC oscillation penalty
+	CarbonReward    float64 `json:"carbon_reward"`       // low-carbon bonus
+	InstructionReward float64 `json:"instruction_reward"`  // Task 4: instruction-following score
+	FaultMitigation float64 `json:"fault_mitigation"`  // Track 3: reward for proper fault response
+	Total           float64 `json:"total"`
 }
 
 // StepResponse is the full HTTP body returned from POST /step.
@@ -116,10 +132,11 @@ type ResetRequest struct {
 
 // ResetResponse is returned from POST /reset.
 type ResetResponse struct {
-	Observations []ObservationModel `json:"observations"` // one per building
-	Episode      int                `json:"episode"`
-	TaskID       int                `json:"task_id"`
-	Seed         int64              `json:"seed"`
+	Observations    []ObservationModel `json:"observations"`               // one per building
+	Episode         int                `json:"episode"`
+	TaskID          int                `json:"task_id"`
+	Seed            int64              `json:"seed"`
+	InstructionCard *InstructionCard   `json:"instruction_card,omitempty"` // populated for Task 4 only
 }
 
 // StateResponse is returned from GET /state.
@@ -169,4 +186,33 @@ type EpisodeGrade struct {
 	ExploitDetected bool                   `json:"exploit_detected"`
 	PenaltyApplied  float64                `json:"penalty_applied"`
 	Details         map[string]interface{} `json:"details"`
+}
+
+// BuildingSummary is a compact per-building view used by the coordinator.
+type BuildingSummary struct {
+	BuildingID          int     `json:"building_id"`
+	CurrentDemandKW     float64 `json:"current_demand_kw"`
+	IndoorTemperature   float64 `json:"indoor_temperature"`
+	ThermalStorageLevel float64 `json:"thermal_storage_level"`
+	CumulativeCost      float64 `json:"cumulative_cost"`
+	GridStressSignal    float64 `json:"grid_stress_signal"`
+	PriceMultiplier     float64 `json:"price_multiplier"` // set by coordinator (default 1.0)
+}
+
+// FeederState is the aggregate fleet view returned by GET /feeder.
+// An LLM coordinator reads this to decide per-building price signals.
+type FeederState struct {
+	TotalDemandKW     float64           `json:"total_demand_kw"`
+	FeederLimitKW     float64           `json:"feeder_limit_kw"`
+	FeederOverload    bool              `json:"feeder_overload"`
+	UtilizationPct    float64           `json:"utilization_pct"`  // TotalDemandKW / FeederLimitKW * 100
+	Buildings         []BuildingSummary `json:"buildings"`
+	PriceCurveHourly  []float64         `json:"price_curve_hourly"` // downsampled 24-point curve
+	Step              int               `json:"step"`
+	Episode           int               `json:"episode"`
+}
+
+// CoordinateRequest is the JSON body for POST /coordinate.
+type CoordinateRequest struct {
+	PriceMultipliers []float64 `json:"price_multipliers"` // one per building, default 1.0
 }

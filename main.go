@@ -152,6 +152,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/state", s.handleState)
 	mux.HandleFunc("/replay", s.handleReplay)
 	mux.HandleFunc("/grade", s.handleGrade)
+	mux.HandleFunc("/feeder", s.handleFeeder)
+	mux.HandleFunc("/coordinate", s.handleCoordinate)
+	mux.HandleFunc("/simulate", s.handleSimulate)
 	mux.HandleFunc("/tasks", s.handleTasks)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/ws", s.handleWebSocket)
@@ -198,8 +201,9 @@ GET  /ping             → ping pong
 GET  /state            → current environment state
 GET  /replay           → episode replay data
 GET  /grade            → episode grade score
-GET  /tasks            → list of tasks
-GET  /metrics          → prometheus metrics
+GET  /feeder           → aggregate fleet status (for coordinator)
+POST /coordinate       → apply price multipliers (for coordinator)
+POST /simulate {action}→ predict next state (world model API)
 POST /reset {task_id}  → start new episode
 POST /step {action}    → take action</pre>
 <h3>📚 Links</h3>
@@ -383,6 +387,57 @@ func (s *Server) handleGrade(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(grade)
+}
+
+// ── /feeder ──────────────────────────────────────────────────────────────────
+
+func (s *Server) handleFeeder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	state := s.envMgr.GetFeederState()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(state)
+}
+
+// ── /coordinate ──────────────────────────────────────────────────────────────
+
+func (s *Server) handleCoordinate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req env.CoordinateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.envMgr.SetCoordinatorSignals(req.PriceMultipliers)
+	w.WriteHeader(http.StatusOK)
+}
+
+// ── /simulate ────────────────────────────────────────────────────────────────
+
+func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var actions []env.ActionModel
+	if err := json.NewDecoder(r.Body).Decode(&actions); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	responses, done := s.envMgr.SimulateStep(actions)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"results": responses,
+		"done":    done,
+	})
 }
 
 // ── /tasks ───────────────────────────────────────────────────────────────────

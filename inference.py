@@ -67,6 +67,7 @@ TASK_DESCRIPTIONS = {
     1: "Task 1 (Easy - Cost Minimization): Minimize total energy cost over 24 hours. No temperature or batch constraints. Use cheap off-peak periods and thermal storage.",
     2: "Task 2 (Medium - Temperature Management): Minimize cost AND keep indoor temperature within 19-23°C at all times. Balance comfort vs cost.",
     3: "Task 3 (Hard - Full Demand Response): Minimize cost, maintain temperature, respond to grid stress (shed when grid_stress_signal > 0.7), schedule batch jobs, minimize carbon.",
+    4: "Task 4 (Hard - Instruction Following): Follow the OBJECTIVE CARD exactly. Parse the stated KPI targets and plan your actions to satisfy them over the full episode.",
 }
 
 ACTION_SCHEMA = """{
@@ -166,6 +167,11 @@ class LLMAgent:
         self.client = get_llm_client()
         self.model = MODEL_NAME
         self.fallback_mode = False
+        self.instruction_card: Optional[dict] = None  # set for task 4 episodes
+
+    def set_instruction_card(self, card: Optional[dict]) -> None:
+        """Store the instruction card received from reset for task 4 episodes."""
+        self.instruction_card = card
 
     def choose_action(self, obs: dict, task_id: int) -> dict:
         """Prompt the LLM with current observation, return parsed action dict."""
@@ -174,10 +180,24 @@ class LLMAgent:
 
         task_desc = TASK_DESCRIPTIONS.get(task_id, TASK_DESCRIPTIONS[1])
 
-        prompt = f"""{task_desc}
+        # For Task 4 — prepend the instruction card objective
+        instruction_block = ""
+        if task_id == 4 and self.instruction_card:
+            card_text = self.instruction_card.get("text", "")
+            instruction_block = f"\n🎯 OBJECTIVE CARD: {card_text}\nYou MUST plan every action to satisfy the above objective.\n"
+
+        # Fault briefing block — injected when disaster events are active
+        fault_block = ""
+        active_faults = obs.get("active_faults", [])
+        if active_faults:
+            fault_lines = "\n".join(f"  {f}" for f in active_faults)
+            fault_block = f"\n🚨 ACTIVE ALARMS — respond immediately:\n{fault_lines}\nPrioritize safety: protect critical zones and reduce load NOW.\n"
+
+        prompt = f"""{task_desc}{instruction_block}{fault_block}
 
 Current observation:
 - Indoor temperature: {obs.get('indoor_temperature', 21):.1f}°C (target: 21°C, bounds: 19-23°C)
+- HVAC Efficiency: {obs.get('hvac_efficiency', 1.0):.3f} (1.0 = perfect, degrades over time)
 - Thermal storage level: {obs.get('thermal_storage_level', 0.5):.2f} (0=empty, 1=full)
 - Process demand: {obs.get('process_demand', 15):.1f} kW
 - Current electricity price: ${obs.get('current_price', 0.10):.4f}/kWh
@@ -288,6 +308,35 @@ Respond with ONLY a JSON action:
         }
 
 
+# ── Curriculum Manager (Self-Improvement Theme) ─────────────────────────────────────────────────
+class CurriculumManager:
+    """
+    Tracks agent performance across episodes and auto-advances task difficulty.
+    Implements the Self-Improvement theme for the Meta OpenEnv Hackathon.
+    """
+    THRESHOLDS = {1: 0.55, 2: 0.50, 3: 0.45}  # reward threshold to advance
+    WINDOW = 5  # episodes to average over
+
+    def __init__(self, start_task: int = 1):
+        self.task_id = start_task
+        self.history = []
+
+    def record(self, episode_reward: float):
+        self.history.append(episode_reward)
+        if len(self.history) >= self.WINDOW:
+            mean = sum(self.history[-self.WINDOW:]) / self.WINDOW
+            threshold = self.THRESHOLDS.get(self.task_id)
+            if threshold and mean >= threshold and self.task_id < 4:
+                print(f"🎓 CURRICULUM: Task {self.task_id} mastered "
+                      f"(mean={mean:.3f} ≥ {threshold}). "
+                      f"Advancing to Task {self.task_id + 1}.")
+                self.task_id += 1
+                self.history = []
+
+    def current_task(self) -> int:
+        return self.task_id
+
+
 # ── Environment Client ────────────────────────────────────────────────────────
 class GridMindEnvClient:
     """HTTP client for the GridMind-RL Go environment server."""
@@ -319,11 +368,29 @@ class GridMindEnvClient:
     def step(self, action: dict) -> Optional[dict]:
         """Take an action and receive the next observation and reward."""
         try:
-            r = requests.post(f"{self.base}/step", json=action, timeout=self.timeout)
+            r = requests.post(f"{self.base}/step", json=[action], timeout=self.timeout)
             r.raise_for_status()
-            return r.json()
+            resp = r.json()
+            if "results" in resp and len(resp["results"]) > 0:
+                return {"observation": resp["results"][0]["observation"], "reward": resp["results"][0]["reward"], "done": resp["done"]}
+            return resp
         except Exception as e:
             print(f"[ERROR] Failed to step environment: {e}", file=sys.stderr)
+            return None
+
+    def simulate(self, actions: list[dict]) -> Optional[dict]:
+        """Predict the next state using the world modeling API without advancing the real environment."""
+        try:
+            r = requests.post(f"{self.base}/simulate", json=actions, timeout=self.timeout)
+            r.raise_for_status()
+            result = r.json()
+            # Always log simulation result for visibility
+            if result and "results" in result and len(result["results"]) > 0:
+                sim_reward = result["results"][0].get("reward", 0.0)
+                print(f"🔮 SIMULATE → predicted_reward={sim_reward:.4f}")
+            return result
+        except Exception as e:
+            print(f"[ERROR] Failed to simulate environment: {e}", file=sys.stderr)
             return None
 
     def grade(self) -> dict:
@@ -389,6 +456,18 @@ def run_episode(
         obs_list = reset_resp.get("observations", [{}])
         obs = obs_list[0] if obs_list else {}
 
+        # For Task 4: store the instruction card on the agent so it injects into prompts
+        if task_id == 4:
+            card = reset_resp.get("instruction_card")
+            agent.set_instruction_card(card)
+            if card:
+                print(f"  [Task4] Objective: {card.get('text', '')}", file=sys.stderr)
+        else:
+            agent.set_instruction_card(None)
+
+        # Running average for world model comparison
+        running_avg = 0.0
+
         while not step_resp.get("done", False):
             if total_steps >= step_limit:
                 break
@@ -400,6 +479,32 @@ def run_episode(
                     cached_action = agent.choose_action(obs, task_id)
                     llm_reuse_remaining = max(1, llm_every)
                 action = cached_action
+
+            # C5: World Modeling - Use /simulate when efficiency is low or faults active
+            hvac_eff = obs.get("hvac_efficiency", 1.0)
+            active_faults_list = obs.get("active_faults", [])
+            use_simulation = not fast_mode and (hvac_eff < 0.7 or len(active_faults_list) > 0)
+
+            sim_result = None
+            sim_reward = None
+            if use_simulation:
+                try:
+                    sim_result = env_client.simulate([action])
+                    if sim_result and "results" in sim_result and len(sim_result["results"]) > 0:
+                        sim_reward = float(sim_result["results"][0]["reward"])
+                        print(f"🔮 SIMULATE → predicted_reward={sim_reward:.4f} | committed", file=sys.stderr)
+                except Exception as e:
+                    print(f"🔮 SIMULATE → failed ({e}), proceeding without", file=sys.stderr)
+
+            # Check if simulation predicts poor reward vs running average
+            if sim_reward is not None and running_avg != 0.0 and sim_reward < running_avg - 0.3:
+                # Ask LLM for alternative action with simulation warning
+                print(f"⚠️ SIMULATION RESULT: proposed action yields reward {sim_reward:.3f} "
+                      f"which is below your running average {running_avg:.3f}. "
+                      f"Consider reducing HVAC load or increasing load shed fraction.", file=sys.stderr)
+                # Get a revised action from the LLM
+                revised_action = agent.choose_action(obs, task_id)
+                action = revised_action
 
             step_resp = env_client.step(action)
             if step_resp is None or not isinstance(step_resp, dict) or "observation" not in step_resp:
@@ -419,6 +524,10 @@ def run_episode(
             raw_reward = float(step_resp["reward"])
             total_reward += raw_reward
             raw_rewards.append(raw_reward)
+
+            # Update running average for world model comparison
+            if total_steps > 0:
+                running_avg = running_avg * 0.9 + raw_reward * 0.1
 
             if raw_reward < reward_min:
                 reward_min = raw_reward
@@ -584,6 +693,18 @@ def main() -> None:
         metavar="N",
         help="Stop after N steps.",
     )
+    parser.add_argument(
+        "--task",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Run specific task (1-4). If not set, runs all tasks.",
+    )
+    parser.add_argument(
+        "--curriculum",
+        action="store_true",
+        help="Enable automatic task curriculum (Theme 4: Self-Improvement)",
+    )
     args = parser.parse_args()
 
     server_proc = start_environment_server(port=7860)
@@ -602,14 +723,29 @@ def main() -> None:
         agent = LLMAgent()
         all_results: list[dict[str, Any]] = []
 
-        for task_id in [1, 2, 3]:
+        # Determine task list: use --task if specified, otherwise all
+        if args.task:
+            task_ids = [args.task]
+        else:
+            task_ids = [1, 2, 3, 4]
+
+        # Initialize curriculum manager if enabled
+        curriculum = None
+        if args.curriculum:
+            curriculum = CurriculumManager(start_task=1)
+            task_ids = [1]  # Always start with task 1 for curriculum
+
+        for task_id in task_ids:
             task_scores: list[float] = []
             for ep in range(args.episodes):
-                seed = DEFAULT_SEED_BASE + task_id * 100 + ep
+                # Use curriculum task if in curriculum mode
+                current_task_id = curriculum.current_task() if curriculum else task_id
+                
+                seed = DEFAULT_SEED_BASE + current_task_id * 100 + ep
                 result = run_episode(
                     env_client,
                     agent,
-                    task_id=task_id,
+                    task_id=current_task_id,
                     seed=seed,
                     fast_mode=args.fast_mode,
                     llm_every=args.llm_every,
@@ -619,11 +755,16 @@ def main() -> None:
                 task_scores.append(float(result["score"]))
                 all_results.append(result)
 
+                # Record to curriculum for progression
+                if curriculum:
+                    curriculum.record(float(result["score"]))
+
+        # Compute task averages
         task_avgs: dict[int, float] = {}
-        for task_id in [1, 2, 3]:
-            scores = [float(r["score"]) for r in all_results if r["task_id"] == task_id]
+        for tid in task_ids:
+            scores = [float(r["score"]) for r in all_results if r["task_id"] == tid]
             avg = clamp_open_score(sum(scores) / len(scores)) if scores else SCORE_EPSILON
-            task_avgs[task_id] = avg
+            task_avgs[tid] = avg
 
         overall = clamp_open_score(sum(task_avgs.values()) / len(task_avgs))
 

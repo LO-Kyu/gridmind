@@ -1,7 +1,11 @@
-// Package env defines the three GridMind-RL tasks and their deterministic graders.
+// Package env defines the four GridMind-RL tasks and their deterministic graders.
 package env
 
-import "math"
+import (
+	"fmt"
+	"math"
+	"math/rand"
+)
 
 // clampOpenInterval clamps a score to the open interval (0, 1), strictly excluding 0.0 and 1.0.
 // This ensures all scores satisfy the requirement: 0 < score < 1
@@ -49,6 +53,108 @@ func AllTasks() []TaskConfig {
 			Difficulty:  "hard",
 			Weights:     map[string]float64{"cost": 0.28, "temperature": 0.20, "grid_response": 0.20, "batch_deadline": 0.12, "carbon": 0.20},
 		},
+		{
+			ID:          4,
+			Name:        "Instruction-Following Operator",
+			Description: "Complete a randomly sampled natural-language objective card. The agent must parse the instruction, plan accordingly, and satisfy all stated KPI targets.",
+			Difficulty:  "hard",
+			Weights:     map[string]float64{"task_completion": 0.50, "cost": 0.30, "temperature": 0.20},
+		},
+	}
+}
+
+// instructionTemplate is a parameterised instruction card template.
+type instructionTemplate struct {
+	makeText    func(params map[string]float64) string
+	targets     map[string]float64
+	weights     map[string]float64
+}
+
+// GenerateInstructionCard samples a random instruction card for Task 4.
+// The card contains a human-readable text objective plus machine-readable targets.
+func GenerateInstructionCard(rng *rand.Rand) *InstructionCard {
+	// Pool of parameterised templates
+	templates := []instructionTemplate{
+		{
+			// Template 1: hard energy cap
+			makeText: func(p map[string]float64) string {
+				return fmt.Sprintf("Keep total energy cost under $%.2f for this 24-hour episode while maintaining comfort.", p["cost_cap"])
+			},
+			targets:  map[string]float64{"max_cost": 0.0}, // filled in below
+			weights:  map[string]float64{"task_completion": 0.5, "cost": 0.3, "temperature": 0.2},
+		},
+		{
+			// Template 2: aggressive temperature constraint
+			makeText: func(p map[string]float64) string {
+				return fmt.Sprintf("Never allow indoor temperature to exceed %.0f°C or drop below %.0f°C at any point during the episode.", p["t_max"], p["t_min"])
+			},
+			targets:  map[string]float64{"t_min": 0.0, "t_max": 0.0},
+			weights:  map[string]float64{"task_completion": 0.5, "temperature": 0.4, "cost": 0.1},
+		},
+		{
+			// Template 3: grid response SLA
+			makeText: func(p map[string]float64) string {
+				return fmt.Sprintf("Respond to all grid stress events (signal > 0.7) by shedding at least %.0f%% of non-critical load.", p["min_shed_pct"]*100)
+			},
+			targets:  map[string]float64{"min_shed_fraction": 0.0},
+			weights:  map[string]float64{"task_completion": 0.5, "cost": 0.2, "temperature": 0.3},
+		},
+		{
+			// Template 4: carbon reduction
+			makeText: func(p map[string]float64) string {
+				return fmt.Sprintf("Reduce carbon emissions to at least %.0f%% below the always-on baseline policy.", p["carbon_reduction_pct"]*100)
+			},
+			targets:  map[string]float64{"carbon_reduction": 0.0},
+			weights:  map[string]float64{"task_completion": 0.5, "cost": 0.2, "temperature": 0.2, "carbon": 0.1},
+		},
+		{
+			// Template 5: combined cost + temperature + grid
+			makeText: func(p map[string]float64) string {
+				return fmt.Sprintf("Keep energy cost under $%.2f, temperature between %.0f–%.0f°C, and respond to all grid stress events.", p["cost_cap"], p["t_min"], p["t_max"])
+			},
+			targets:  map[string]float64{"max_cost": 0.0, "t_min": 0.0, "t_max": 0.0, "min_shed_fraction": 0.25},
+			weights:  map[string]float64{"task_completion": 0.5, "cost": 0.2, "temperature": 0.2, "grid_response": 0.1},
+		},
+	}
+
+	// Pick a random template
+	tmpl := templates[rng.Intn(len(templates))]
+
+	// Randomise numeric parameters
+	params := map[string]float64{
+		"cost_cap":             1.5 + rng.Float64()*2.0,   // $1.50 – $3.50
+		"t_min":               18.0 + rng.Float64()*2.0,  // 18–20 °C
+		"t_max":               23.0 + rng.Float64()*2.0,  // 23–25 °C
+		"min_shed_pct":        0.2 + rng.Float64()*0.2,   // 20–40 %
+		"carbon_reduction_pct": 0.15 + rng.Float64()*0.2, // 15–35 %
+	}
+
+	// Fill targets from params
+	targets := make(map[string]float64)
+	for k := range tmpl.targets {
+		switch k {
+		case "max_cost":
+			targets[k] = params["cost_cap"]
+		case "t_min":
+			targets[k] = params["t_min"]
+		case "t_max":
+			targets[k] = params["t_max"]
+		case "min_shed_fraction":
+			targets[k] = params["min_shed_pct"]
+		case "carbon_reduction":
+			targets[k] = params["carbon_reduction_pct"]
+		}
+	}
+
+	weights := make(map[string]float64)
+	for k, v := range tmpl.weights {
+		weights[k] = v
+	}
+
+	return &InstructionCard{
+		Text:    tmpl.makeText(params),
+		Targets: targets,
+		Weights: weights,
 	}
 }
 
