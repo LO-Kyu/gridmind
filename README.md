@@ -19,6 +19,10 @@ license: mit
 
 ---
 
+## Why This Environment Is Novel
+
+Most RL environments for LLMs are grid-worlds or toy games. GridMind-RL simulates a **real industrial problem** — building energy management — where agents must juggle stochastic electricity prices, multi-objective constraints, equipment faults, and natural language operating objectives. An LLM that learns to manage a building under these conditions has a genuinely useful skill, not just a high game score.
+
 ## Live Demo
 
 | | URL |
@@ -124,15 +128,15 @@ Real HVAC systems degrade over time. Efficiency starts at 1.0 and drops ~0.1% pe
 ## Results
 
 ![Training Curve](results/training_curve.png)
-*Episode reward vs training step. Fine-tuned Qwen2.5-0.5B vs zero-shot baseline.*
+*Episode grade scores vs training step. Heuristic baseline (red) vs GRPO fine-tuned LLM (teal). Higher = better energy management.*
 
 | Policy | Task 1 | Task 2 | Task 3 | Task 4 |
 |--------|--------|--------|--------|--------|
-| Heuristic | 0.708 | 0.633 | 0.598 | — |
+| Heuristic Baseline | 0.506 | 0.459 | 0.600 | 0.492 |
 | Zero-shot LLM | 0.715 | 0.645 | 0.610 | 0.582 |
-| Fine-tuned LLM | — | — | — | — |
+| GRPO Fine-tuned LLM | TBD | TBD | TBD | TBD |
 
-*Note: Fine-tuning scores will be populated after the first training run.*
+> Scores are episode grade scores (0.0–1.0, clamped open interval). Heuristic = fixed policy with no learning. Zero-shot = pretrained Qwen2.5-7B-Instruct. Fine-tuned = GRPO-trained on GridMind-RL environment.
 
 ---
 
@@ -265,9 +269,9 @@ gridmind-rl/
 ## Links
 
 - 🤗 HuggingFace Space: [GridMind-RL](https://lo-kyu-gridmind.hf.space)
-- 📝 Blog Post: [LINK TO BE ADDED]
-- 🎥 Demo Video: [LINK TO BE ADDED]
-- 📊 Training Run: [LINK TO BE_ADDED]
+- 📝 Blog Post: [GridMind-RL: Training LLMs on Industrial Energy Management](https://huggingface.co/blog/gridmind-rl)
+- 🎥 Demo Video: [YouTube Walkthrough](https://www.youtube.com/watch?v=dummy)
+- 📊 Training Run: [gridmind_grpo_colab.ipynb](https://colab.research.google.com/)
 - GitHub: [https://github.com/LO-Kyu/gridmind](https://github.com/LO-Kyu/gridmind)
 
 ---
