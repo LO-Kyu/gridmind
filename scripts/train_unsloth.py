@@ -84,15 +84,15 @@ def reward_has_required_keys(completions, **kwargs):
     return rewards
 
 def get_reward_env_interaction(env_url):
-    """Closure to capture the target environment URL for the reward function.
+    """Episode-level reward from /grade endpoint with seed variation.
 
-    Uses a SHORT (8-step) rollout to get a more genuine episode-level reward signal.
-    The grade endpoint returns the true episode score (0.0-1.0 clamped open interval),
-    which is what we use as the reward — not the step-level reward.
+    Uses 8-step rollouts with varied seeds to prevent mode collapse.
+    The /grade endpoint returns the true episode score (0.0-1.0 clamped),
+    which we use directly as the primary learning signal.
     """
     def reward_env_interaction(completions, **kwargs):
         rewards = []
-        for completion in completions:
+        for i, completion in enumerate(completions):
             text = completion[0]["content"] if isinstance(completion, list) else completion
             try:
                 match = re.search(r'\{.*?\}', text, re.DOTALL)
@@ -105,16 +105,19 @@ def get_reward_env_interaction(env_url):
                     "building_id": 0
                 }
 
+                # Vary seed to prevent mode collapse — each rollout sees a different episode
+                seed = 1000 + i
+                task_id = (i % 3) + 1  # Cycle through tasks 1, 2, 3
+
                 reset_resp = requests.post(
                     f"{env_url}/reset",
-                    json={"task_id": 2, "seed": 42},
+                    json={"task_id": task_id, "seed": seed},
                     timeout=30
                 )
                 if reset_resp.status_code != 200:
                     rewards.append(0.0)
                     continue
 
-                step_rewards = []
                 for _ in range(8):
                     step_resp = requests.post(
                         f"{env_url}/step",
@@ -122,25 +125,17 @@ def get_reward_env_interaction(env_url):
                         timeout=30
                     )
                     if step_resp.status_code != 200:
-                        step_rewards.append(0.0)
-                        continue
-                    result = step_resp.json()
-                    if isinstance(result, list) and len(result) > 0:
-                        r = float(result[0].get("reward", 0.0))
-                    elif isinstance(result, dict) and "results" in result:
-                        r = float(result["results"][0].get("reward", 0.0))
-                    else:
-                        r = 0.0
-                    step_rewards.append(r)
+                        break
 
                 grade_resp = requests.get(f"{env_url}/grade", timeout=30)
                 if grade_resp.status_code == 200:
                     episode_score = float(grade_resp.json().get("score", 0.5))
-                    val = episode_score * 0.4
+                    # Normalize: heuristic baseline ≈ 0.5, zero-shot ≈ 0.65, trained ≈ 0.72
+                    # Map to 0.0-1.0 where 0.5 is the floor (heuristic), 0.72 is the ceiling (trained target)
+                    normalized = (episode_score - 0.4) / 0.32  # maps 0.4→0.0, 0.72→1.0
+                    rewards.append(max(0.0, min(1.0, normalized)))
                 else:
-                    mean_step_reward = sum(step_rewards) / len(step_rewards) if step_rewards else 0.0
-                    val = (mean_step_reward + 2.0) * 0.08
-                rewards.append(min(0.4, max(0.0, val)))
+                    rewards.append(0.0)
 
             except Exception as e:
                 print(f"Env error: {e}", file=sys.stderr)

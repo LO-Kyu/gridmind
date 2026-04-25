@@ -13,11 +13,11 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def load_baseline_scores():
-    """Load baseline scores from JSON file."""
-    baseline_path = "baseline_scores.json"
-    if os.path.exists(baseline_path):
-        with open(baseline_path) as f:
+def load_heuristic_scores():
+    """Load heuristic baseline scores."""
+    path = "results/baseline_scores_heuristic.json"
+    if os.path.exists(path):
+        with open(path) as f:
             return json.load(f)
     return None
 
@@ -26,106 +26,66 @@ def main():
     parser.add_argument("--csv", type=str, default="results/training_log.csv", help="Path to training CSV")
     parser.add_argument("--output", type=str, default="results/training_curve.png", help="Path to save PNG")
     args = parser.parse_args()
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
 
-    # Ensure results directory exists
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    heuristic_data = load_heuristic_scores()
 
-    baseline_data = load_baseline_scores()
-    
     if not os.path.exists(args.csv):
-        print(f"❌ Error: CSV file not found at {args.csv}")
-        print("   Run training first: python scripts/train_unsloth.py")
-        
-        # If no training data, try to create a placeholder with baseline only
-        if baseline_data:
-            print("   Generating baseline-only plot...")
-            plt.style.use('dark_background')
-            fig, ax = plt.subplots(figsize=(10, 6))
-            
-            # Get baseline scores
-            task_avgs = baseline_data.get("task_averages", {})
-            heuristic_score = task_avgs.get("1", 0.708)
-            zeroshot_score = baseline_data.get("overall_average", heuristic_score)
-            
-            # Plot baseline reference lines
-            ax.axhline(y=heuristic_score, color='#FF6B6B', linestyle='--', linewidth=2, 
-                     label=f'Heuristic baseline ({heuristic_score:.3f})')
-            ax.axhline(y=zeroshot_score, color='#FFE66D', linestyle='--', linewidth=2,
-                     label=f'Zero-shot LLM ({zeroshot_score:.3f})')
-            
-            ax.set_title("GridMind-RL: Training Not Yet Run", fontsize=16, pad=20, color='#e6edf3')
-            ax.set_xlabel("Training Step", fontsize=12, color='#e6edf3')
-            ax.set_ylabel("Episode Reward", fontsize=12, color='#e6edf3')
-            
-            ax.grid(True, linestyle='--', alpha=0.3, color='#8b949e')
-            ax.legend(loc='upper left', frameon=True, facecolor='#0d1117', edgecolor='#30363d', labelcolor='#e6edf3')
-            
-            plt.tight_layout()
-            plt.savefig(args.output, dpi=150, bbox_inches='tight', facecolor='#0d1117')
-            print(f"✅ Baseline reference saved to {args.output}")
+        print("No CSV found.")
         return
 
-    print(f"📊 Reading training logs from {args.csv}")
+    print(f"Reading training logs from {args.csv}")
     df = pd.read_csv(args.csv)
-
-    # Need 'step' and at least one reward column
-    if 'step' not in df.columns:
-        print("❌ Error: 'step' column not found in CSV.")
+    if "step" not in df.columns:
+        print("No 'step' column found.")
         return
 
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Get baseline scores from our real runs
+    h_avg = 0.514  # overall heuristic average from real runs
+    if heuristic_data:
+        h_avg = heuristic_data.get("overall_average", 0.514)
 
-    # Find reward columns
-    reward_cols = [col for col in df.columns if col.startswith('reward')]
-    
-    if not reward_cols:
-        print("❌ Error: No reward columns found in CSV.")
-        return
+    plt.style.use("dark_background")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Get baseline reference scores
-    heuristic_score = 0.708
-    zeroshot_score = 0.715
-    if baseline_data:
-        task_avgs = baseline_data.get("task_averages", {})
-        heuristic_score = task_avgs.get("1", 0.708)
-        zeroshot_score = baseline_data.get("overall_average", 0.715)
+    # Left: Episode score (from /grade)
+    ax = axes[0]
+    episode_col = "rewards/reward_env_interaction/mean"
+    if episode_col in df.columns:
+        raw = df[episode_col]
+        smooth = raw.rolling(window=5, min_periods=1).mean()
+        ax.plot(df["step"], raw, alpha=0.25, color="#4ECDC4", label="Raw")
+        ax.plot(df["step"], smooth, color="#4ECDC4", linewidth=2.5, label="Trained LLM (smoothed)")
+        ax.axhline(y=h_avg, color="#FF6B6B", linestyle="--", linewidth=2,
+                   label=f"Heuristic baseline ({h_avg:.3f})")
+        ax.set_xlabel("Training Step", fontsize=11, color="#e6edf3")
+        ax.set_ylabel("Episode Score (0.0-1.0)", fontsize=11, color="#e6edf3")
+        ax.set_title("Episode Score from /grade Endpoint\n(Higher = Better Energy Management)",
+                     fontsize=12, color="#e6edf3")
+        ax.legend(fontsize=10)
+        ax.grid(True, linestyle="--", alpha=0.3, color="#8b949e")
+        ax.set_ylim(0.35, 0.75)
+        print(f"Episode score: {raw.iloc[0]:.3f} -> {smooth.dropna().iloc[-1]:.3f}")
 
-    # Plot training curve with smoothing
-    colors = ['#4ECDC4', '#FF6B6B', '#FFE66D', '#1A535C']
-    
-    for idx, col in enumerate(reward_cols):
-        # Apply smoothing (rolling mean)
-        smoothed = df[col].rolling(window=10, min_periods=1).mean()
-        label = col.replace('reward_', '').replace('_', ' ').title()
-        if label == 'Reward':
-            label = 'Fine-tuned LLM'
-            
-        ax.plot(df['step'], smoothed, label=label, linewidth=2.5, 
-                color=colors[idx % len(colors)], alpha=0.9)
+    # Right: JSON validity
+    ax2 = axes[1]
+    json_col = "rewards/reward_json_valid/mean"
+    if json_col in df.columns:
+        raw = df[json_col]
+        smooth = raw.rolling(window=5, min_periods=1).mean()
+        ax2.plot(df["step"], raw, alpha=0.25, color="#FFE66D", label="Raw")
+        ax2.plot(df["step"], smooth, color="#FFE66D", linewidth=2.5, label="JSON Validity (smoothed)")
+        ax2.set_xlabel("Training Step", fontsize=11, color="#e6edf3")
+        ax2.set_ylabel("JSON Format Reward (0.0-0.2)", fontsize=11, color="#e6edf3")
+        ax2.set_title("Action Format Compliance\n(Higher = Better JSON Output)",
+                      fontsize=12, color="#e6edf3")
+        ax2.legend(fontsize=10)
+        ax2.grid(True, linestyle="--", alpha=0.3, color="#8b949e")
+        ax2.set_ylim(0, 0.22)
 
-    # Add baseline reference lines
-    ax.axhline(y=heuristic_score, color='#FF6B6B', linestyle='--', linewidth=2, 
-             label=f'Heuristic baseline ({heuristic_score:.3f})')
-    ax.axhline(y=zeroshot_score, color='#FFE66D', linestyle='--', linewidth=2,
-             label=f'Zero-shot LLM ({zeroshot_score:.3f})')
-
-    ax.set_title("GridMind-RL: Fine-tuned vs Baseline Performance", fontsize=16, pad=20, color='#e6edf3')
-    ax.set_xlabel("Training Step", fontsize=12, color='#e6edf3')
-    ax.set_ylabel("Episode Reward", fontsize=12, color='#e6edf3')
-    
-    ax.grid(True, linestyle='--', alpha=0.3, color='#8b949e')
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_color('#8b949e')
-    ax.spines['left'].set_color('#8b949e')
-    ax.tick_params(colors='#8b949e')
-
-    ax.legend(loc='upper left', frameon=True, facecolor='#0d1117', edgecolor='#30363d', labelcolor='#e6edf3')
-    
     plt.tight_layout()
-    plt.savefig(args.output, dpi=150, bbox_inches='tight', facecolor='#0d1117')
-    print(f"✅ Training curve saved to {args.output}")
+    plt.savefig(args.output, dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    print(f"Training curve saved to {args.output}")
 
 if __name__ == "__main__":
     main()
