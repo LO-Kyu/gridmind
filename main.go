@@ -149,6 +149,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/ping", s.handlePing)
 	mux.HandleFunc("/reset", s.handleReset)
 	mux.HandleFunc("/step", s.handleStep)
+	mux.HandleFunc("/coordinator/reset", s.handleCoordinatorReset)
+	mux.HandleFunc("/coordinator/step", s.handleCoordinatorStep)
 	mux.HandleFunc("/state", s.handleState)
 	mux.HandleFunc("/replay", s.handleReplay)
 	mux.HandleFunc("/grade", s.handleGrade)
@@ -310,6 +312,80 @@ func (s *Server) handleStep(w http.ResponseWriter, r *http.Request) {
 	} else {
 		json.NewEncoder(w).Encode(responses)
 	}
+}
+
+// ── /coordinator/reset ──────────────────────────────────────────────────────
+
+func (s *Server) handleCoordinatorReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req env.ResetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Allow empty body → defaults
+		req = env.ResetRequest{TaskID: 1, NumBuildings: 3}
+	}
+	if req.TaskID == 0 {
+		req.TaskID = 1
+	}
+	if req.NumBuildings == 0 {
+		req.NumBuildings = 3
+	}
+	resp := s.envMgr.Reset(req)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// ── /coordinator/step ───────────────────────────────────────────────────────
+
+func (s *Server) handleCoordinatorStep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	start := time.Now()
+
+	// Accept array of actions (one per building)
+	var actions []env.ActionModel
+
+	body := make([]byte, 0, 512)
+	buf := make([]byte, 512)
+	for {
+		n, err := r.Body.Read(buf)
+		body = append(body, buf[:n]...)
+		if err != nil {
+			break
+		}
+	}
+
+	if err := json.Unmarshal(body, &actions); err != nil {
+		atomic.AddInt64(&metrics.errorCount, 1)
+		http.Error(w, "invalid action array: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// If empty array provided, use defaults
+	if len(actions) == 0 {
+		actions = []env.ActionModel{{HVACPowerLevel: 0.5, BuildingID: 0}}
+	}
+
+	responses, _ := s.envMgr.Step(actions)
+
+	latency := float64(time.Since(start).Microseconds()) / 1000.0
+	for _, resp := range responses {
+		metrics.recordStep(latency, resp.Reward)
+	}
+	if len(actions) > 0 {
+		metrics.recordAction(actions[0].HVACPowerLevel)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Always return array format for coordinator
+	json.NewEncoder(w).Encode(responses)
 }
 
 // ── /state ───────────────────────────────────────────────────────────────────
@@ -511,15 +587,15 @@ func getClientIP(r *http.Request) string {
 // ── /ws (WebSocket) ───────────────────────────────────────────────────────────
 
 type WSMessage struct {
-	Type  string          `json:"type"`
-	Data  json.RawMessage `json:"data,omitempty"`
-	Seed  *int64         `json:"seed,omitempty"`
-	TaskID int            `json:"task_id,omitempty"`
+	Type   string          `json:"type"`
+	Data   json.RawMessage `json:"data,omitempty"`
+	Seed   *int64          `json:"seed,omitempty"`
+	TaskID int             `json:"task_id,omitempty"`
 }
 
 type WSResetMessage struct {
-	Seed        *int64 `json:"seed,omitempty"`
-	TaskID      int    `json:"task_id,omitempty"`
+	Seed         *int64 `json:"seed,omitempty"`
+	TaskID       int    `json:"task_id,omitempty"`
 	NumBuildings int    `json:"num_buildings,omitempty"`
 }
 
@@ -634,13 +710,13 @@ func (s *Server) handleWSReset(conn *websocket.Conn, data json.RawMessage) {
 			"thermal_storage_level": obs.ThermalStorageLevel,
 			"process_demand":        obs.ProcessDemand,
 			"current_price":         obs.CurrentPrice,
-			"grid_stress_signal":   obs.GridStressSignal,
-			"carbon_intensity":     obs.CarbonIntensity,
-			"hour_of_day":          obs.HourOfDay,
-			"batch_queue":          obs.BatchQueue,
-			"cumulative_cost":      obs.CumulativeCost,
-			"step":                 obs.Step,
-			"building_id":          obs.BuildingID,
+			"grid_stress_signal":    obs.GridStressSignal,
+			"carbon_intensity":      obs.CarbonIntensity,
+			"hour_of_day":           obs.HourOfDay,
+			"batch_queue":           obs.BatchQueue,
+			"cumulative_cost":       obs.CumulativeCost,
+			"step":                  obs.Step,
+			"building_id":           obs.BuildingID,
 		},
 		"reward": nil,
 		"done":   false,
@@ -699,13 +775,13 @@ func (s *Server) handleWSStep(conn *websocket.Conn, data json.RawMessage) {
 			"thermal_storage_level": obs.Observation.ThermalStorageLevel,
 			"process_demand":        obs.Observation.ProcessDemand,
 			"current_price":         obs.Observation.CurrentPrice,
-			"grid_stress_signal":   obs.Observation.GridStressSignal,
-			"carbon_intensity":     obs.Observation.CarbonIntensity,
-			"hour_of_day":          obs.Observation.HourOfDay,
-			"batch_queue":          obs.Observation.BatchQueue,
-			"cumulative_cost":      obs.Observation.CumulativeCost,
-			"step":                 obs.Observation.Step,
-			"building_id":          obs.Observation.BuildingID,
+			"grid_stress_signal":    obs.Observation.GridStressSignal,
+			"carbon_intensity":      obs.Observation.CarbonIntensity,
+			"hour_of_day":           obs.Observation.HourOfDay,
+			"batch_queue":           obs.Observation.BatchQueue,
+			"cumulative_cost":       obs.Observation.CumulativeCost,
+			"step":                  obs.Observation.Step,
+			"building_id":           obs.Observation.BuildingID,
 		},
 		"reward": obs.Reward,
 		"done":   done,
@@ -735,8 +811,8 @@ func (s *Server) handleWSResetDirect(conn *websocket.Conn, seed *int64, taskID i
 	}
 
 	resp := s.envMgr.Reset(env.ResetRequest{
-		Seed:        seed,
-		TaskID:      taskID,
+		Seed:         seed,
+		TaskID:       taskID,
 		NumBuildings: 1,
 	})
 
@@ -747,13 +823,13 @@ func (s *Server) handleWSResetDirect(conn *websocket.Conn, seed *int64, taskID i
 			"thermal_storage_level": obs.ThermalStorageLevel,
 			"process_demand":        obs.ProcessDemand,
 			"current_price":         obs.CurrentPrice,
-			"grid_stress_signal":   obs.GridStressSignal,
-			"carbon_intensity":     obs.CarbonIntensity,
-			"hour_of_day":          obs.HourOfDay,
-			"batch_queue":          obs.BatchQueue,
-			"cumulative_cost":      obs.CumulativeCost,
-			"step":                 obs.Step,
-			"building_id":          obs.BuildingID,
+			"grid_stress_signal":    obs.GridStressSignal,
+			"carbon_intensity":      obs.CarbonIntensity,
+			"hour_of_day":           obs.HourOfDay,
+			"batch_queue":           obs.BatchQueue,
+			"cumulative_cost":       obs.CumulativeCost,
+			"step":                  obs.Step,
+			"building_id":           obs.BuildingID,
 		},
 		"reward": nil,
 		"done":   false,
@@ -809,13 +885,13 @@ func (s *Server) handleWSStepDirect(conn *websocket.Conn, msgBytes []byte) {
 			"thermal_storage_level": obs.Observation.ThermalStorageLevel,
 			"process_demand":        obs.Observation.ProcessDemand,
 			"current_price":         obs.Observation.CurrentPrice,
-			"grid_stress_signal":   obs.Observation.GridStressSignal,
-			"carbon_intensity":     obs.Observation.CarbonIntensity,
-			"hour_of_day":          obs.Observation.HourOfDay,
-			"batch_queue":          obs.Observation.BatchQueue,
-			"cumulative_cost":      obs.Observation.CumulativeCost,
-			"step":                 obs.Observation.Step,
-			"building_id":          obs.Observation.BuildingID,
+			"grid_stress_signal":    obs.Observation.GridStressSignal,
+			"carbon_intensity":      obs.Observation.CarbonIntensity,
+			"hour_of_day":           obs.Observation.HourOfDay,
+			"batch_queue":           obs.Observation.BatchQueue,
+			"cumulative_cost":       obs.Observation.CumulativeCost,
+			"step":                  obs.Observation.Step,
+			"building_id":           obs.Observation.BuildingID,
 		},
 		"reward": obs.Reward,
 		"done":   done,

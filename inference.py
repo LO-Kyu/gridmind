@@ -163,11 +163,15 @@ def get_llm_client() -> OpenAI:
 
 # ── LLM Agent ────────────────────────────────────────────────────────────────
 class LLMAgent:
-    def __init__(self):
-        self.client = get_llm_client()
+    def __init__(self, fast_mode: bool = False):
+        self.client = None
         self.model = MODEL_NAME
-        self.fallback_mode = False
+        self.fallback_mode = fast_mode  # Start in fallback if fast mode
         self.instruction_card: Optional[dict] = None  # set for task 4 episodes
+        
+        # Only initialize LLM client if not in fast mode
+        if not fast_mode:
+            self.client = get_llm_client()
 
     def set_instruction_card(self, card: Optional[dict]) -> None:
         """Store the instruction card received from reset for task 4 episodes."""
@@ -175,7 +179,7 @@ class LLMAgent:
 
     def choose_action(self, obs: dict, task_id: int) -> dict:
         """Prompt the LLM with current observation, return parsed action dict."""
-        if self.fallback_mode:
+        if self.fallback_mode or self.client is None:
             return self._heuristic_action(obs)
 
         task_desc = TASK_DESCRIPTIONS.get(task_id, TASK_DESCRIPTIONS[1])
@@ -223,6 +227,10 @@ Strategy hints:
 
 Respond with ONLY a JSON action:
 {ACTION_SCHEMA}"""
+
+        # If no client available, use heuristic
+        if self.client is None:
+            return self._heuristic_action(obs)
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -379,6 +387,16 @@ class GridMindEnvClient:
             print(f"[ERROR] Failed to step environment: {e}", file=sys.stderr)
             return None
 
+    def coordinator_step(self, actions: list[dict]) -> Optional[dict]:
+        """Multi-agent step: send per-building actions to /coordinator/step."""
+        try:
+            r = requests.post(f"{self.base}/coordinator/step", json=actions, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"[ERROR] Failed to coordinator step: {e}", file=sys.stderr)
+            return None
+
     def simulate(self, actions: list[dict]) -> Optional[dict]:
         """Predict the next state using the world modeling API without advancing the real environment."""
         try:
@@ -476,92 +494,211 @@ def run_episode(
             if total_steps >= step_limit:
                 break
 
-            if fast_mode:
-                action = agent._heuristic_action(obs)
-            else:
-                if llm_reuse_remaining <= 0:
-                    cached_action = agent.choose_action(obs, task_id)
-                    llm_reuse_remaining = max(1, llm_every)
-                action = cached_action
+            if coordinator:
+                # ─────────────────────────────────────────────────────
+                # Multi-Agent Coordinator Mode (Theme 1)
+                # ─────────────────────────────────────────────────────
+                building_actions = []
+                action_jsons = []
+                
+                # Get LLM action for each building
+                for bid, building_obs in enumerate(obs_list):
+                    if fast_mode:
+                        action = agent._heuristic_action(building_obs)
+                    else:
+                        if llm_reuse_remaining <= 0:
+                            action = agent.choose_action(building_obs, task_id)
+                            llm_reuse_remaining = max(1, llm_every)
+                        else:
+                            action = cached_action
+                    
+                    action["building_id"] = bid
+                    building_actions.append(action)
+                    action_jsons.append(json.dumps(action, separators=(',', ':')))
+                
+                if not fast_mode:
+                    llm_reuse_remaining -= 1
 
-            # C5: World Modeling - Use /simulate when efficiency is low or faults active
-            hvac_eff = obs.get("hvac_efficiency", 1.0)
-            active_faults_list = obs.get("active_faults", [])
-            use_simulation = not fast_mode and (use_planning or hvac_eff < 0.7 or len(active_faults_list) > 0)
+                # Execute coordinator step with all building actions
+                coord_resp = env_client.coordinator_step(building_actions)
+                if coord_resp is None or not isinstance(coord_resp, (dict, list)):
+                    log_step(
+                        step=total_steps + 1,
+                        action="null",
+                        reward=0.0,
+                        done=True,
+                        error="invalid coordinator step response",
+                    )
+                    break
 
-            sim_result = None
-            sim_reward = None
-            if use_simulation:
-                try:
-                    sim_result = env_client.simulate([action])
-                    if sim_result and "results" in sim_result and len(sim_result["results"]) > 0:
-                        sim_reward = float(sim_result["results"][0]["reward"])
-                        print(f"🔮 SIMULATE → predicted_reward={sim_reward:.4f} | committed", file=sys.stderr)
-                except Exception as e:
-                    print(f"🔮 SIMULATE → failed ({e}), proceeding without", file=sys.stderr)
-
-            # Check if simulation predicts poor reward vs running average
-            if sim_reward is not None and running_avg != 0.0 and sim_reward < running_avg - 0.3:
-                # Ask LLM for alternative action with simulation warning
-                print(f"⚠️ SIMULATION RESULT: proposed action yields reward {sim_reward:.3f} "
-                      f"which is below your running average {running_avg:.3f}. "
-                      f"Consider reducing HVAC load or increasing load shed fraction.", file=sys.stderr)
-                # Get a revised action from the LLM
-                revised_action = agent.choose_action(obs, task_id)
-                action = revised_action
-
-            step_resp = env_client.step(action)
-            if step_resp is None or not isinstance(step_resp, dict) or "observation" not in step_resp:
+                # Process responses from all buildings
+                # coord_resp can be either an array directly or a dict with "responses" key
+                if isinstance(coord_resp, list):
+                    responses = coord_resp
+                    done = False  # Will be set from responses or episode state
+                else:
+                    responses = coord_resp.get("responses", [])
+                    done = bool(coord_resp.get("done", False))
+                
+                obs_list = []
+                step_rewards = []
+                
+                for i, resp in enumerate(responses):
+                    if isinstance(resp, dict):
+                        if "observation" in resp:
+                            obs_list.append(resp["observation"])
+                        reward = float(resp.get("reward", 0.0))
+                    else:
+                        reward = 0.0
+                    step_rewards.append(reward)
+                
+                if not obs_list:
+                    log_step(
+                        step=total_steps + 1,
+                        action="null",
+                        reward=0.0,
+                        done=True,
+                        error="no observations in coordinator response",
+                    )
+                    break
+                
+                obs = obs_list[0]  # Use primary building for logging
+                
+                # Aggregate reward (mean of all buildings)
+                raw_reward = sum(step_rewards) / len(step_rewards) if step_rewards else 0.0
+                if isinstance(coord_resp, list) and len(responses) > 0:
+                    done = bool(responses[-1].get("done", False)) if isinstance(responses[-1], dict) else False
+                
+                # Log primary building action and aggregated reward
+                primary_action_json = action_jsons[0] if action_jsons else "null"
+                total_reward += raw_reward
+                raw_rewards.append(raw_reward)
+                
+                # Update running average
+                if total_steps > 0:
+                    running_avg = running_avg * 0.9 + raw_reward * 0.1
+                
+                if raw_reward < reward_min:
+                    reward_min = raw_reward
+                if raw_reward > reward_max:
+                    reward_max = raw_reward
+                
+                total_steps += 1
+                normalized_reward = normalize_reward(raw_reward, reward_min, reward_max)
+                
                 log_step(
-                    step=total_steps + 1,
-                    action="null",
-                    reward=0.0,
-                    done=True,
-                    error="invalid step response from environment",
+                    step=total_steps,
+                    action=primary_action_json,
+                    reward=normalized_reward,
+                    done=done,
+                    error=None,
                 )
-                break
+                
+                if verbose and total_steps % 16 == 0:
+                    temps = [o.get('indoor_temperature', 21) for o in obs_list]
+                    costs = [o.get('cumulative_cost', 0) for o in obs_list]
+                    print(
+                        f"    step={total_steps:02d} buildings={len(obs_list)} "
+                        f"temps={[f'{t:.1f}' for t in temps]} "
+                        f"costs=${sum(costs):.2f}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                
+                step_resp = {"done": done}
+            
+            else:
+                # ─────────────────────────────────────────────────────
+                # Single-Building Mode (default)
+                # ─────────────────────────────────────────────────────
+                if fast_mode:
+                    action = agent._heuristic_action(obs)
+                else:
+                    if llm_reuse_remaining <= 0:
+                        cached_action = agent.choose_action(obs, task_id)
+                        llm_reuse_remaining = max(1, llm_every)
+                    action = cached_action
 
-            if not fast_mode:
-                llm_reuse_remaining -= 1
+                # C5: World Modeling - Use /simulate when efficiency is low or faults active
+                hvac_eff = obs.get("hvac_efficiency", 1.0)
+                active_faults_list = obs.get("active_faults", [])
+                use_simulation = not fast_mode and (use_planning or hvac_eff < 0.7 or len(active_faults_list) > 0)
 
-            obs = step_resp["observation"]
-            raw_reward = float(step_resp["reward"])
-            total_reward += raw_reward
-            raw_rewards.append(raw_reward)
+                sim_result = None
+                sim_reward = None
+                if use_simulation:
+                    try:
+                        sim_result = env_client.simulate([action])
+                        if sim_result and "results" in sim_result and len(sim_result["results"]) > 0:
+                            sim_reward = float(sim_result["results"][0]["reward"])
+                            print(f"🔮 SIMULATE → predicted_reward={sim_reward:.4f} | committed", file=sys.stderr)
+                    except Exception as e:
+                        print(f"🔮 SIMULATE → failed ({e}), proceeding without", file=sys.stderr)
 
-            # Update running average for world model comparison
-            if total_steps > 0:
-                running_avg = running_avg * 0.9 + raw_reward * 0.1
+                # Check if simulation predicts poor reward vs running average
+                if sim_reward is not None and running_avg != 0.0 and sim_reward < running_avg - 0.3:
+                    # Ask LLM for alternative action with simulation warning
+                    print(f"⚠️ SIMULATION RESULT: proposed action yields reward {sim_reward:.3f} "
+                          f"which is below your running average {running_avg:.3f}. "
+                          f"Consider reducing HVAC load or increasing load shed fraction.", file=sys.stderr)
+                    # Get a revised action from the LLM
+                    revised_action = agent.choose_action(obs, task_id)
+                    action = revised_action
 
-            if raw_reward < reward_min:
-                reward_min = raw_reward
-            if raw_reward > reward_max:
-                reward_max = raw_reward
+                step_resp = env_client.step(action)
+                if step_resp is None or not isinstance(step_resp, dict) or "observation" not in step_resp:
+                    log_step(
+                        step=total_steps + 1,
+                        action="null",
+                        reward=0.0,
+                        done=True,
+                        error="invalid step response from environment",
+                    )
+                    break
 
-            total_steps += 1
-            done = bool(step_resp.get("done", False))
+                if not fast_mode:
+                    llm_reuse_remaining -= 1
 
-            normalized_reward = normalize_reward(raw_reward, reward_min, reward_max)
+                obs = step_resp["observation"]
+                raw_reward = float(step_resp["reward"])
+                total_reward += raw_reward
+                raw_rewards.append(raw_reward)
 
-            action_json = json.dumps(action, separators=(',', ':'))
-            last_action_error = step_resp.get("last_action_error")
-            log_step(
-                step=total_steps,
-                action=action_json,
-                reward=normalized_reward,
-                done=done,
-                error=last_action_error,
-            )
+                # Update running average for world model comparison
+                if total_steps > 0:
+                    running_avg = running_avg * 0.9 + raw_reward * 0.1
 
-            if verbose and total_steps % 16 == 0:
-                print(
-                    f"    step={total_steps:02d} price=${obs['current_price']:.3f} "
-                    f"temp={obs['indoor_temperature']:.1f}°C "
-                    f"stress={obs['grid_stress_signal']:.2f} "
-                    f"cost=${obs['cumulative_cost']:.2f}",
-                    flush=True,
-                    file=sys.stderr,
+                if raw_reward < reward_min:
+                    reward_min = raw_reward
+                if raw_reward > reward_max:
+                    reward_max = raw_reward
+
+                total_steps += 1
+                done = bool(step_resp.get("done", False))
+
+                normalized_reward = normalize_reward(raw_reward, reward_min, reward_max)
+
+                action_json = json.dumps(action, separators=(',', ':'))
+                last_action_error = step_resp.get("last_action_error")
+                log_step(
+                    step=total_steps,
+                    action=action_json,
+                    reward=normalized_reward,
+                    done=done,
+                    error=last_action_error,
                 )
+
+                if verbose and total_steps % 16 == 0:
+                    print(
+                        f"    step={total_steps:02d} price=${obs['current_price']:.3f} "
+                        f"temp={obs['indoor_temperature']:.1f}°C "
+                        f"stress={obs['grid_stress_signal']:.2f} "
+                        f"cost=${obs['cumulative_cost']:.2f}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                
+                step_resp = {"done": done}
 
         success = bool(step_resp.get("done", False))
 
@@ -734,7 +871,7 @@ def main() -> None:
                 print("Environment server not reachable.", file=sys.stderr)
                 sys.exit(1)
 
-        agent = LLMAgent()
+        agent = LLMAgent(fast_mode=args.fast_mode)
         all_results: list[dict[str, Any]] = []
 
         # Determine task list: use --task if specified, otherwise all
