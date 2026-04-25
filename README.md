@@ -57,6 +57,24 @@ GridMind-RL closes this gap by simulating a complete building energy system wher
 | **Episode** | 96 steps = 24 simulated hours @ 15-min resolution |
 | **Tasks** | 4 tasks: (1) cost, (2) temperature, (3) demand_response, (4) instruction_following |
 
+### Reward Weight Rationale
+
+Weights reflect real-world building operator priorities — not arbitrary values:
+
+| Component | Weight | Rationale |
+|---|---|---|
+| `cost_savings` | 0.28 | Primary operator KPI — energy spend is the main business metric |
+| `carbon_reward` | 0.20 | ESG compliance — increasingly mandatory for industrial operators |
+| `temp_constraint` | 0.20 | Hard safety constraint — comfort SLA violations incur penalties |
+| `grid_response` | 0.20 | Regulatory SLA — demand response programs pay operators to shed load |
+| `batch_deadline` | 0.12 | Production continuity — missing batch deadlines causes downstream losses |
+| `efficiency_bonus` | 0.05 | Storage arbitrage — incentivises smart charge/discharge timing |
+| `stability_penalty` | -0.05 | Anti-cycling — prevents HVAC thrashing that causes equipment wear |
+| `fault_mitigation` | 0.05 | Emergency response — correct fault handling prevents costly outages |
+| `instruction_reward` | 0.50* | Task 4 only — weighted per the episode's instruction card |
+
+> *Task 4 instruction reward weight comes from the sampled instruction card, not a fixed value.
+
 ### Observation Fields
 
 | Field | Type | Description |
