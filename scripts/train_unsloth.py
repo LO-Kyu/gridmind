@@ -14,6 +14,7 @@ Fixed:
 """
 
 import argparse
+import inspect
 import json
 import math
 import os
@@ -667,24 +668,39 @@ def main():
         })
     print(f"✅ Dataset ready: {len(dataset)} training prompts")
     
-    training_args = GRPOConfig(
-        output_dir=args.output_dir,
-        num_train_epochs=args.epochs,
-        max_steps=args.max_steps,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=4,
-        num_generations=4,  # FIXED: was 2, need 4 for variance
-        max_prompt_length=256,
-        max_completion_length=128,
-        learning_rate=5e-6,  # FIXED: was 5e-5, too high
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.1,
-        logging_steps=5,
-        save_steps=100,
-        fp16=True,
-        report_to="none",
-        seed=42,
-    )
+    requested_training_args = {
+        "output_dir": args.output_dir,
+        "num_train_epochs": args.epochs,
+        "max_steps": args.max_steps,
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": 4,
+        "num_generations": 4,  # FIXED: was 2, need 4 for variance
+        "max_prompt_length": 256,
+        "max_completion_length": 128,
+        "max_new_tokens": 128,
+        "learning_rate": 5e-6,  # FIXED: was 5e-5, too high
+        "lr_scheduler_type": "cosine",
+        "warmup_ratio": 0.1,
+        "logging_steps": 5,
+        "save_steps": 100,
+        "fp16": True,
+        "report_to": "none",
+        "seed": 42,
+    }
+    grpo_config_params = set(inspect.signature(GRPOConfig.__init__).parameters) - {"self"}
+    training_arg_kwargs = {
+        key: value for key, value in requested_training_args.items()
+        if key in grpo_config_params
+    }
+    if "max_completion_length" in training_arg_kwargs and "max_new_tokens" in training_arg_kwargs:
+        training_arg_kwargs.pop("max_new_tokens")
+    skipped_training_args = [
+        key for key in requested_training_args
+        if key not in grpo_config_params
+    ]
+    if skipped_training_args:
+        print(f"Skipping unsupported GRPOConfig args: {skipped_training_args}")
+    training_args = GRPOConfig(**training_arg_kwargs)
     
     reward_fn = GridMindRewardFn(args.env_url, num_steps=8)
     
