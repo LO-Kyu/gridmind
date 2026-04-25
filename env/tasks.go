@@ -167,6 +167,7 @@ type GradeEpisodeInput struct {
 	TMin             float64
 	TMax             float64
 	ExploitPenalties []float64
+	InstructionCard  *InstructionCard // set for Task 4 episodes
 }
 
 // GradeEpisode computes a deterministic 0.0–1.0 score for a completed episode.
@@ -185,6 +186,8 @@ func GradeEpisode(inp GradeEpisodeInput) EpisodeGrade {
 		grade = gradeTask2(inp, grade)
 	case 3:
 		grade = gradeTask3(inp, grade)
+	case 4:
+		grade = gradeTask4(inp, grade)
 	default:
 		grade = gradeTask1(inp, grade)
 	}
@@ -345,4 +348,147 @@ func gradeTask3(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
 	grade.Details["agent_carbon"] = agentCarbon
 	grade.Details["baseline_carbon"] = baselineCarbon
 	return grade
+}
+
+// ── Task 4: Instruction-Following Operator ───────────────────────────────────
+
+// gradeTask4 evaluates how well the agent satisfied the natural-language
+// instruction card issued at reset. It reads the InstructionCard from Building 0,
+// checks each target that appears in the card, and computes a weighted score.
+// Falls back to Task 3 grading when no instruction card is available.
+func gradeTask4(inp GradeEpisodeInput, grade EpisodeGrade) EpisodeGrade {
+	// Require an instruction card — passed from the environment at grade time
+	if inp.InstructionCard == nil {
+		// Fallback: grade as Task 3 (no card to evaluate)
+		return gradeTask3(inp, grade)
+	}
+
+	card := inp.InstructionCard
+	weights := card.Weights
+	targets := card.Targets
+
+	// Always compute base sub-scores — reuse existing graders
+	base := gradeTask3(inp, EpisodeGrade{
+		TaskID:    inp.TaskID,
+		SubScores: map[string]float64{},
+		Details:   map[string]interface{}{},
+	})
+	costScore := base.SubScores["cost"]
+	tempScore := base.SubScores["temperature"]
+	gridScore := base.SubScores["grid_response"]
+	carbonScore := base.SubScores["carbon"]
+
+	// ── Card-specific KPI checks ─────────────────────────────────────────────
+
+	// KPI 1: Cost cap — did the agent stay under max_cost?
+	taskCompletionScore := 0.5 // default partial credit
+	if maxCost, ok := targets["max_cost"]; ok && maxCost > 0 {
+		agentCost := 0.0
+		for _, b := range inp.Buildings {
+			agentCost += b.CumulativeCost
+		}
+		if agentCost <= maxCost {
+			taskCompletionScore = 1.0
+		} else {
+			// Partial credit: how close were they?
+			taskCompletionScore = math.Max(0, 1.0-(agentCost-maxCost)/maxCost)
+		}
+		grade.Details["target_max_cost"] = maxCost
+		grade.Details["actual_cost"] = agentCost
+	}
+
+	// KPI 2: Temperature bounds — never violated t_min / t_max
+	if tMin, hasTMin := targets["t_min"]; hasTMin {
+		tMax, hasTMax := targets["t_max"]
+		if hasTMax {
+			totalSteps := 0
+			withinBounds := 0
+			for _, history := range inp.TempHistory {
+				for _, temp := range history {
+					totalSteps++
+					if temp >= tMin && temp <= tMax {
+						withinBounds++
+					}
+				}
+			}
+			if totalSteps > 0 {
+				adherence := float64(withinBounds) / float64(totalSteps)
+				// Strict: full credit only if ALWAYS within bounds
+				taskCompletionScore = adherence
+			}
+			grade.Details["target_t_min"] = tMin
+			grade.Details["target_t_max"] = tMax
+		}
+	}
+
+	// KPI 3: Grid response SLA — shed >= min_shed_fraction when stress > 0.7
+	if minShed, ok := targets["min_shed_fraction"]; ok {
+		stressSteps := 0
+		compliantSteps := 0
+		for _, entry := range inp.Replay {
+			if entry.Observation.GridStressSignal > 0.7 {
+				stressSteps++
+				if entry.Action.LoadShedFraction >= minShed {
+					compliantSteps++
+				}
+			}
+		}
+		if stressSteps > 0 {
+			taskCompletionScore = float64(compliantSteps) / float64(stressSteps)
+		}
+		grade.Details["target_min_shed"] = minShed
+		grade.Details["stress_steps"] = stressSteps
+		grade.Details["compliant_steps"] = compliantSteps
+	}
+
+	// KPI 4: Carbon reduction — did agent beat baseline by carbon_reduction target?
+	if carbonTarget, ok := targets["carbon_reduction"]; ok {
+		agentCarbon := 0.0
+		baselineCarbon := 0.0
+		for _, b := range inp.Buildings {
+			agentCarbon += b.CumulativeCarbon
+			baselineCarbon += b.BaselineCarbon
+		}
+		if baselineCarbon > 0 {
+			actualReduction := 1.0 - agentCarbon/baselineCarbon
+			if actualReduction >= carbonTarget {
+				taskCompletionScore = 1.0
+			} else {
+				taskCompletionScore = math.Max(0, actualReduction/carbonTarget)
+			}
+		}
+		grade.Details["target_carbon_reduction"] = carbonTarget
+	}
+
+	// ── Weighted final score ─────────────────────────────────────────────────
+	// Use weights from the card; fall back to Task 4 defaults if missing
+	wTask := getWeight(weights, "task_completion", 0.50)
+	wCost := getWeight(weights, "cost", 0.20)
+	wTemp := getWeight(weights, "temperature", 0.20)
+	wGrid := getWeight(weights, "grid_response", 0.05)
+	wCarbon := getWeight(weights, "carbon", 0.05)
+
+	finalScore := taskCompletionScore*wTask +
+		costScore*wCost +
+		tempScore*wTemp +
+		gridScore*wGrid +
+		carbonScore*wCarbon
+
+	grade.SubScores["task_completion"] = clampOpenInterval(math.Round(taskCompletionScore*10000) / 10000)
+	grade.SubScores["cost"] = clampOpenInterval(math.Round(costScore*10000) / 10000)
+	grade.SubScores["temperature"] = clampOpenInterval(math.Round(tempScore*10000) / 10000)
+	grade.SubScores["grid_response"] = clampOpenInterval(math.Round(gridScore*10000) / 10000)
+	grade.SubScores["carbon"] = clampOpenInterval(math.Round(carbonScore*10000) / 10000)
+	grade.Score = clampOpenInterval(math.Round(finalScore*10000) / 10000)
+
+	grade.Details["instruction_card_text"] = card.Text
+	return grade
+}
+
+// getWeight safely retrieves a weight from a map, returning defaultVal if missing.
+func getWeight(weights map[string]float64, key string, defaultVal float64) float64 {
+	if v, ok := weights[key]; ok {
+		return v
+	}
+	return defaultVal
 }

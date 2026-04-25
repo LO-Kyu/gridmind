@@ -382,6 +382,7 @@ func (s *Server) handleGrade(w http.ResponseWriter, r *http.Request) {
 		TMin:             env.TMinDefault,
 		TMax:             env.TMaxDefault,
 		ExploitPenalties: penalties,
+		InstructionCard:  state.InstructionCard,
 	})
 
 	w.Header().Set("Content-Type", "application/json")

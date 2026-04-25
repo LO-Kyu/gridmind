@@ -141,14 +141,15 @@ type ResetResponse struct {
 
 // StateResponse is returned from GET /state.
 type StateResponse struct {
-	Buildings    []BuildingStatePublic `json:"buildings"`
-	PriceCurve   []float64            `json:"price_curve_episode"`    // full episode ToU prices
-	CarbonCurve  []float64            `json:"carbon_curve_episode"`   // full episode carbon intensities
-	Episode      int                  `json:"episode"`
-	Step         int                  `json:"step"`
-	TaskID       int                  `json:"task_id"`
-	Done         bool                 `json:"done"`
-	Seed         int64                `json:"seed"`
+	Buildings       []BuildingStatePublic `json:"buildings"`
+	PriceCurve      []float64            `json:"price_curve_episode"`  // full episode ToU prices
+	CarbonCurve     []float64            `json:"carbon_curve_episode"` // full episode carbon intensities
+	Episode         int                  `json:"episode"`
+	Step            int                  `json:"step"`
+	TaskID          int                  `json:"task_id"`
+	Done            bool                 `json:"done"`
+	Seed            int64                `json:"seed"`
+	InstructionCard *InstructionCard     `json:"instruction_card,omitempty"` // Task 4 only
 }
 
 // BuildingStatePublic is the dashboard-friendly full state per building.

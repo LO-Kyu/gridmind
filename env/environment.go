@@ -250,14 +250,15 @@ func (e *Environment) GetState() StateResponse {
 	}
 
 	return StateResponse{
-		Buildings:   buildings,
-		PriceCurve:  priceCurve,
-		CarbonCurve: carbonCurve,
-		Episode:     e.episode,
-		Step:        e.step,
-		TaskID:      e.taskID,
-		Done:        e.done,
-		Seed:        e.seed,
+		Buildings:       buildings,
+		PriceCurve:      priceCurve,
+		CarbonCurve:     carbonCurve,
+		Episode:         e.episode,
+		Step:            e.step,
+		TaskID:          e.taskID,
+		Done:            e.done,
+		Seed:            e.seed,
+		InstructionCard: e.InstructionCard,
 	}
 }
 
