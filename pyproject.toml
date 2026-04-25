@@ -7,7 +7,7 @@ name = "gridmind-rl"
 version = "1.0.0"
 description = "GridMind-RL: Industrial Load-Shaping and Demand-Response RL Environment. Control HVAC, thermal storage, and batch job scheduling under stochastic electricity prices and grid stress events."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "LOKyu Team"}
@@ -21,7 +21,6 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -30,7 +29,7 @@ classifiers = [
 
 dependencies = [
     "openai>=1.0.0",
-    "openenv-core>=0.2.0",
+    "openenv-core>=0.2.3",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "pydantic>=2.0.0",

@@ -6,7 +6,7 @@
 #
 # Prerequisites:
 #   - Docker:       https://docs.docker.com/get-docker/
-#   - openenv-core: pip install openenv-core
+#   - openenv-core: pip install openenv-core==0.2.3
 #   - curl (usually pre-installed)
 #
 # Run:
@@ -155,7 +155,7 @@ log "${BOLD}Step 3/3: Running openenv validate${NC} ..."
 
 if ! command -v openenv &>/dev/null; then
   fail "openenv command not found"
-  hint "Install it: pip install openenv-core"
+  hint "Install it: pip install openenv-core==0.2.3"
   stop_at "Step 3"
 fi
 
