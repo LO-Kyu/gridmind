@@ -1022,7 +1022,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			"GET /state", "POST /simulate", "GET /feeder", "POST /coordinate",
 			"GET /health", "GET /info",
 		},
-		"hf_space": "https://lo-kyu-gridmind.hf.space",
+		"hf_space": "https://prajwal782007-gridmind.hf.space",
 		"github":   "https://github.com/LO-Kyu/gridmind",
 	}
 	w.Header().Set("Content-Type", "application/json")

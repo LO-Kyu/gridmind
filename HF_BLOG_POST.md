@@ -75,7 +75,7 @@ Or run the Colab notebook: [gridmind_grpo_colab.ipynb](https://colab.research.go
 
 ```bash
 # Quick health check
-curl https://lo-kyu-gridmind.hf.space/health
+curl https://prajwal782007-gridmind.hf.space/health
 
 # Run a heuristic baseline
 python inference.py --fast-mode --task 3 --episodes 5
@@ -84,8 +84,8 @@ python inference.py --fast-mode --task 3 --episodes 5
 python inference.py --task 3 --episodes 5
 ```
 
-Live environment: [https://lo-kyu-gridmind.hf.space](https://lo-kyu-gridmind.hf.space)  
-Dashboard: [https://lo-kyu-gridmind.hf.space/dashboard](https://lo-kyu-gridmind.hf.space/dashboard)
+Live environment: [https://prajwal782007-gridmind.hf.space](https://prajwal782007-gridmind.hf.space)  
+Dashboard: [https://prajwal782007-gridmind.hf.space/dashboard](https://prajwal782007-gridmind.hf.space/dashboard)
 
 Code: [github.com/LO-Kyu/gridmind](https://github.com/LO-Kyu/gridmind)
 

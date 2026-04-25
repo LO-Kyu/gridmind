@@ -12,7 +12,7 @@ Shows:
 
 Usage:
     python scripts/demo_run.py
-    python scripts/demo_run.py --url https://lo-kyu-gridmind.hf.space
+    python scripts/demo_run.py --url https://prajwal782007-gridmind.hf.space
     python scripts/demo_run.py --fast          # heuristic only (no LLM key needed)
 """
 

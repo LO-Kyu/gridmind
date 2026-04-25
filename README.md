@@ -27,13 +27,13 @@ Most RL environments for LLMs are grid-worlds or toy games. GridMind-RL simulate
 
 | | URL |
 |--|-----|
-| **Environment API** | https://lo-kyu-gridmind.hf.space |
-| **Live Dashboard** | https://lo-kyu-gridmind.hf.space/dashboard |
+| **Environment API** | https://prajwal782007-gridmind.hf.space |
+| **Live Dashboard** | https://prajwal782007-gridmind.hf.space/dashboard |
 
 **Quick test:**
 ```bash
-curl https://lo-kyu-gridmind.hf.space/health
-curl https://lo-kyu-gridmind.hf.space/tasks
+curl https://prajwal782007-gridmind.hf.space/health
+curl https://prajwal782007-gridmind.hf.space/tasks
 ```
 
 ---
@@ -268,7 +268,7 @@ gridmind-rl/
 
 ## Links
 
-- 🤗 HuggingFace Space: [GridMind-RL](https://lo-kyu-gridmind.hf.space)
+- 🤗 HuggingFace Space: [GridMind-RL](https://prajwal782007-gridmind.hf.space)
 - 📝 Blog Post: [GridMind-RL: Training LLMs on Industrial Energy Management](https://huggingface.co/blog/gridmind-rl)
 - 🎥 Demo Video: [YouTube Walkthrough](https://www.youtube.com/watch?v=dummy)
 - 📊 Training Run: [gridmind_grpo_colab.ipynb](https://colab.research.google.com/)
