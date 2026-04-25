@@ -116,11 +116,11 @@ func ComputeReward(inp ComputeRewardInput) RewardComponents {
 	}
 
 	// ── Aggregate ────────────────────────────────────────────────────────────
-	// Total includes all 9 components with fault_mitigation weighted at 0.05
-	// Reduce StabilityPenalty weight by 0.05 to keep sum = 1.0
+	// Total is the sum of all 9 reward components. Each component is computed
+	// independently above and contributes directly to the total signal.
 	rc.Total = rc.CostSavings + rc.TempConstraint + rc.GridResponse +
 		rc.DeadlinePenalty + rc.EfficiencyBonus + rc.StabilityPenalty + rc.CarbonReward +
-		rc.InstructionReward + rc.FaultMitigation*0.05 + rc.FaultMitigation*0.95
+		rc.InstructionReward + rc.FaultMitigation
 
 	return rc
 }

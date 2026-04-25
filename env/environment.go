@@ -84,7 +84,7 @@ func (e *Environment) Reset(req ResetRequest) ResetResponse {
 
 	// Apply task and difficulty
 	e.taskID = req.TaskID
-	if e.taskID < 1 || e.taskID > 3 {
+	if e.taskID < 1 || e.taskID > 4 {
 		e.taskID = 1
 	}
 	e.difficulty = req.Difficulty
@@ -94,7 +94,7 @@ func (e *Environment) Reset(req ResetRequest) ResetResponse {
 			e.difficulty = "easy"
 		case 2:
 			e.difficulty = "medium"
-		case 3:
+		case 3, 4:
 			e.difficulty = "hard"
 		}
 	}
