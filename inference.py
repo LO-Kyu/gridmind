@@ -429,6 +429,8 @@ def run_episode(
     llm_every: int,
     max_steps: Optional[int],
     verbose: bool = False,
+    coordinator: bool = False,
+    use_planning: bool = False,
 ) -> dict[str, Any]:
     """Run a single episode and emit hackathon-compliant stdout format."""
     task_name = f"gridmind-task-{task_id}"
@@ -450,7 +452,8 @@ def run_episode(
     obs: dict[str, Any] = {}
 
     try:
-        reset_resp = env_client.reset(task_id=task_id, seed=seed)
+        num_buildings = 3 if coordinator else 1
+        reset_resp = env_client.reset(task_id=task_id, seed=seed, num_buildings=num_buildings)
         if reset_resp is None:
             raise RuntimeError("reset failed")
         obs_list = reset_resp.get("observations", [{}])
@@ -483,7 +486,7 @@ def run_episode(
             # C5: World Modeling - Use /simulate when efficiency is low or faults active
             hvac_eff = obs.get("hvac_efficiency", 1.0)
             active_faults_list = obs.get("active_faults", [])
-            use_simulation = not fast_mode and (hvac_eff < 0.7 or len(active_faults_list) > 0)
+            use_simulation = not fast_mode and (use_planning or hvac_eff < 0.7 or len(active_faults_list) > 0)
 
             sim_result = None
             sim_reward = None
@@ -705,6 +708,16 @@ def main() -> None:
         action="store_true",
         help="Enable automatic task curriculum (Theme 4: Self-Improvement)",
     )
+    parser.add_argument(
+        "--coordinator",
+        action="store_true",
+        help="Multi-building coordinator mode: reset with 3 buildings (Theme 1: Multi-Agent)",
+    )
+    parser.add_argument(
+        "--use-planning",
+        action="store_true",
+        help="Force /simulate world-model call on every step (Theme 3: World Modeling)",
+    )
     args = parser.parse_args()
 
     server_proc = start_environment_server(port=7860)
@@ -751,6 +764,8 @@ def main() -> None:
                     llm_every=args.llm_every,
                     max_steps=args.max_steps,
                     verbose=args.verbose,
+                    coordinator=args.coordinator,
+                    use_planning=args.use_planning,
                 )
                 task_scores.append(float(result["score"]))
                 all_results.append(result)

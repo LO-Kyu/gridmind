@@ -158,6 +158,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/tasks", s.handleTasks)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/ws", s.handleWebSocket)
+	mux.HandleFunc("/info", s.handleInfo)
 	// Reverse proxy for dashboard (runs on port 7861 internally)
 	mux.HandleFunc("/dashboard", s.handleDashboardProxy)
 	mux.HandleFunc("/dashboard/", s.handleDashboardProxy)
@@ -878,4 +879,53 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleInfo returns OpenEnv-standard metadata for automated validators and judges.
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	info := map[string]interface{}{
+		"name":        "gridmind-rl",
+		"version":     "2.0.0",
+		"description": "Multi-building industrial energy management RL environment with instruction-following, world modeling, fault injection, and curriculum learning.",
+		"multi_agent": true,
+		"themes": []string{
+			"multi-agent",
+			"long-horizon-planning",
+			"world-modeling",
+			"self-improvement",
+		},
+		"observation_space": map[string]interface{}{
+			"type": "dict",
+			"fields": []string{
+				"indoor_temperature", "thermal_storage_level", "current_price",
+				"grid_stress_signal", "carbon_intensity", "hour_of_day", "step",
+				"hvac_efficiency", "process_demand", "cumulative_cost",
+				"batch_queue", "active_faults", "instruction_card",
+			},
+		},
+		"action_space": map[string]interface{}{
+			"type": "dict",
+			"fields": map[string]string{
+				"hvac_power_level":    "float [0.0, 1.0]",
+				"thermal_charge_rate": "float [-1.0, 1.0]",
+				"batch_job_slot":      "int [0, 4]",
+				"load_shed_fraction":  "float [0.0, 0.5]",
+				"building_id":         "int [0, N_buildings-1]",
+			},
+		},
+		"endpoints": []string{
+			"POST /reset", "POST /step", "GET /grade", "GET /tasks",
+			"GET /state", "POST /simulate", "GET /feeder", "POST /coordinate",
+			"GET /health", "GET /info",
+		},
+		"hf_space": "https://lo-kyu-gridmind.hf.space",
+		"github":   "https://github.com/LO-Kyu/gridmind",
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(info)
 }
