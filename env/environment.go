@@ -368,8 +368,14 @@ func (e *Environment) generatePriceCurve() {
 }
 
 // touPrice returns the base time-of-use price for a given hour.
+// Price schedule ($/kWh):
+//   00:00–06:00  0.035  Deep off-peak (lowest demand)
+//   06:00–08:00  0.070  Ramp-up (industry + residential start)
+//   08:00–12:00  0.200  Morning peak (industrial load high)
+//   12:00–17:00  0.120  Solar + stabilised demand shoulder
+//   17:00–21:00  0.310  True peak (highest grid stress)
+//   21:00–24:00  0.093  Declining demand
 func touPrice(hour, morningShift, eveningShift int) float64 {
-	// Off-peak: 0.04 $/kWh, on-peak: 0.18 $/kWh, extreme peak: 0.32 $/kWh
 	morningPeakStart := 8 + morningShift
 	morningPeakEnd := 12 + morningShift
 	eveningPeakStart := 17 + eveningShift
@@ -377,15 +383,17 @@ func touPrice(hour, morningShift, eveningShift int) float64 {
 
 	switch {
 	case hour >= morningPeakStart && hour < morningPeakEnd:
-		return 0.18
-	case hour >= eveningPeakStart && hour <= eveningPeakEnd:
-		return 0.22
-	case (hour >= 9 && hour < morningPeakStart) || (hour >= morningPeakEnd && hour < eveningPeakStart):
-		return 0.10
-	case hour >= 23 || hour < 6:
-		return 0.04
+		return 0.20 // Morning peak: 0.16–0.24 $/kWh
+	case hour >= eveningPeakStart && hour < eveningPeakEnd:
+		return 0.31 // Evening peak: 0.26–0.36 $/kWh
+	case hour >= morningPeakEnd && hour < eveningPeakStart:
+		return 0.12 // Solar/shoulder: 0.09–0.15 $/kWh
+	case hour >= 6 && hour < morningPeakStart:
+		return 0.07 // Ramp-up: 0.055–0.085 $/kWh
+	case hour >= eveningPeakEnd:
+		return 0.093 // Declining: 0.075–0.11 $/kWh
 	default:
-		return 0.08
+		return 0.035 // Deep off-peak (0–6 AM): 0.028–0.042 $/kWh
 	}
 }
 
@@ -394,8 +402,8 @@ func touPrice(hour, morningShift, eveningShift int) float64 {
 func (e *Environment) generateCarbonCurve() {
 	for s := 0; s < EpisodeSteps; s++ {
 		price := e.PriceCurve[s]
-		// Map price range [0.04, 0.32] → carbon [150, 600] gCO2/kWh
-		carbon := 150.0 + (price-0.04)/(0.32-0.04)*(600.0-150.0)
+		// Map price range [0.028, 0.36] → carbon [150, 600] gCO2/kWh
+		carbon := 150.0 + (price-0.028)/(0.36-0.028)*(600.0-150.0)
 		noise := (e.rng.Float64()*2 - 1) * 30.0
 		e.CarbonCurve[s] = math.Max(100.0, carbon+noise)
 	}
@@ -585,7 +593,7 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 func (e *Environment) updateGridStress(s int) float64 {
 	// Grid stress is elevated during price peaks and stochastic demand spikes
 	price := e.PriceCurve[s]
-	priceNorm := (price - 0.04) / (0.32 - 0.04)
+	priceNorm := (price - 0.028) / (0.36 - 0.028)
 
 	// Random stress events
 	stressProb := 0.05

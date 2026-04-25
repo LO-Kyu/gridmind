@@ -214,11 +214,12 @@ IMPORTANT RULES:
 - shed load during grid stress to earn rewards
 
 Strategy hints:
-- Charge thermal storage (positive) when price < $0.08/kWh
-- Discharge thermal storage (negative) when price > $0.15/kWh
+- Charge thermal storage (positive) when price < $0.08/kWh (off-peak 0–6 AM, ramp 6–8 AM)
+- Discharge thermal storage (negative) when price > $0.18/kWh (morning or evening peak)
 - MUST shed load (0.2-0.5) when grid_stress_signal > 0.7
 - Set HVAC low during peak prices (0.3-0.4) and use storage for temperature control
-- Schedule batch jobs early if deadline is close (slot 0 or 1)
+- Schedule batch jobs during off-peak hours (0–6 AM, slots 0–2) to avoid paying peak rates
+- True peak is 17:00–21:00 (~$0.26–0.36/kWh) — always discharge storage then
 
 Respond with ONLY a JSON action:
 {ACTION_SCHEMA}"""
@@ -275,9 +276,9 @@ Respond with ONLY a JSON action:
             hvac = min(hvac, 0.2)
 
         charge = 0.0
-        if price < 0.07 and storage < 0.8:
+        if price < 0.08 and storage < 0.8:
             charge = 0.5
-        elif price > 0.15 and storage > 0.3:
+        elif price > 0.18 and storage > 0.3:
             charge = -0.5
 
         shed = 0.0
