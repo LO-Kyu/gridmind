@@ -85,15 +85,16 @@ def reward_has_required_keys(completions, **kwargs):
 
 def get_reward_env_interaction(env_url):
     """Closure to capture the target environment URL for the reward function.
-    
-    Uses direct requests calls instead of GenericEnvClient to avoid dependency issues.
+
+    Uses a SHORT (8-step) rollout to get a more genuine episode-level reward signal.
+    The grade endpoint returns the true episode score (0.0-1.0 clamped open interval),
+    which is what we use as the reward — not the step-level reward.
     """
     def reward_env_interaction(completions, **kwargs):
         rewards = []
         for completion in completions:
             text = completion[0]["content"] if isinstance(completion, list) else completion
             try:
-                # Parse action from LLM output
                 match = re.search(r'\{.*?\}', text, re.DOTALL)
                 action = json.loads(match.group()) if match else {}
                 step_action = {
@@ -103,41 +104,44 @@ def get_reward_env_interaction(env_url):
                     "load_shed_fraction": float(max(0, min(0.5, action.get("load_shed_fraction", 0.0)))),
                     "building_id": 0
                 }
-                
-                # Direct HTTP calls to environment instead of GenericEnvClient
-                # Reset the environment first
+
                 reset_resp = requests.post(
                     f"{env_url}/reset",
-                    json={"task_id": 1, "seed": 42},
+                    json={"task_id": 2, "seed": 42},
                     timeout=30
                 )
                 if reset_resp.status_code != 200:
                     rewards.append(0.0)
                     continue
-                
-                # Take a step with the proposed action
-                step_resp = requests.post(
-                    f"{env_url}/step",
-                    json=[step_action],
-                    timeout=30
-                )
-                if step_resp.status_code != 200:
-                    rewards.append(0.0)
-                    continue
-                
-                result = step_resp.json()
-                if isinstance(result, list) and len(result) > 0:
-                    step_reward = float(result[0].get("reward", 0.0))
-                elif isinstance(result, dict) and "results" in result:
-                    step_reward = float(result["results"][0].get("reward", 0.0))
+
+                step_rewards = []
+                for _ in range(8):
+                    step_resp = requests.post(
+                        f"{env_url}/step",
+                        json=[step_action],
+                        timeout=30
+                    )
+                    if step_resp.status_code != 200:
+                        step_rewards.append(0.0)
+                        continue
+                    result = step_resp.json()
+                    if isinstance(result, list) and len(result) > 0:
+                        r = float(result[0].get("reward", 0.0))
+                    elif isinstance(result, dict) and "results" in result:
+                        r = float(result["results"][0].get("reward", 0.0))
+                    else:
+                        r = 0.0
+                    step_rewards.append(r)
+
+                grade_resp = requests.get(f"{env_url}/grade", timeout=30)
+                if grade_resp.status_code == 200:
+                    episode_score = float(grade_resp.json().get("score", 0.5))
+                    val = episode_score * 0.4
                 else:
-                    step_reward = 0.0
-                
-                # Normalize reward to 0.0-0.4 range. The Go step reward is usually around [-2.0, 3.0].
-                # Shift by +2.0 and scale by 0.05 to map to ~0.0-0.4.
-                val = (step_reward + 2.0) * 0.08
+                    mean_step_reward = sum(step_rewards) / len(step_rewards) if step_rewards else 0.0
+                    val = (mean_step_reward + 2.0) * 0.08
                 rewards.append(min(0.4, max(0.0, val)))
-                
+
             except Exception as e:
                 print(f"Env error: {e}", file=sys.stderr)
                 rewards.append(0.0)
