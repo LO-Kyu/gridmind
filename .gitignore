@@ -59,3 +59,22 @@ STRICT_QA_COMPLIANCE_REPORT.md
 qa_strict_tests.py
 qa_test_suite.py
 *.exe
+
+# Machine Learning & Data
+results/
+outputs/
+logs/
+models/
+checkpoints/
+wandb/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+
+# AI Agent Artifacts
+IMPLEMENTATION_PLAN.md
+TODO_SPRINT.md
+context.md
+REPORT.md
