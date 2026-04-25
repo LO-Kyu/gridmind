@@ -642,6 +642,7 @@ def main():
     print(f"🚀 Loading model: {args.model_name}")
     max_seq_length = 512
     lora_rank = 8
+    use_bf16 = bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
     
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_name,
@@ -683,7 +684,9 @@ def main():
         "warmup_ratio": 0.1,
         "logging_steps": 5,
         "save_steps": 100,
-        "fp16": True,
+        "fp16": not use_bf16,
+        "bf16": use_bf16,
+        "max_grad_norm": 0.0,
         "report_to": "none",
         "seed": 42,
     }
