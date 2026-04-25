@@ -77,6 +77,22 @@ schemas:
         items:
           type: string
         description: "Human-readable list of active fault alarm strings. Empty when no faults. Track 3."
+      task_card:
+        type: string
+      nl_summary:
+        type: string
+      market_type:
+        type: string
+      season:
+        type: string
+      price_volatility:
+        type: number
+      price_forecast:
+        type: array
+        items:
+          type: number
+      demand_charge_active:
+        type: boolean
       instruction_card:
         type: [object, "null"]
         description: "Natural language objective card. Only populated when task_id=4. Track 2."
@@ -210,9 +226,13 @@ schemas:
                 type: number
               carbon_reward:
                 type: number
-              instruction_reward:
+              task_satisfaction:
                 type: number
               fault_mitigation:
+                type: number
+              price_anticipation:
+                type: number
+              demand_charge_penalty:
                 type: number
               total:
                 type: number
@@ -344,11 +364,11 @@ endpoints:
   health:
     path: /health
     method: GET
-    description: Health check - returns {"status": "ok", "version": "1.0.0"}
+    description: 'Health check - returns {"status": "ok", "version": "1.0.0"}'
   ping:
     path: /ping
     method: GET
-    description: Liveness probe - returns {"status": "ok"}
+    description: 'Liveness probe - returns {"status": "ok"}'
   reset:
     path: /reset
     method: POST

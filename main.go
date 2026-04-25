@@ -240,15 +240,39 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req env.ResetRequest
+	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Allow empty body → defaults
-		req = env.ResetRequest{TaskID: 1}
+		req = make(map[string]interface{})
 	}
-	if req.TaskID == 0 {
-		req.TaskID = 1
+	taskID := 1
+	if t, ok := req["task_id"].(float64); ok {
+		taskID = int(t)
+	} else if t, ok := req["task_id"].(int64); ok {
+		taskID = int(t)
+	} else if t, ok := req["task_id"].(int); ok {
+		taskID = t
 	}
-	resp := s.envMgr.Reset(req)
+	if taskID == 0 {
+		taskID = 1
+	}
+	seed := int64(0)
+	if s, ok := req["seed"].(float64); ok {
+		seed = int64(s)
+	} else if s, ok := req["seed"].(int64); ok {
+		seed = s
+	}
+	numBuildings := 1
+	if nb, ok := req["num_buildings"].(float64); ok {
+		numBuildings = int(nb)
+	}
+	resetReq := env.ResetRequest{
+		TaskID:       taskID,
+		NumBuildings: numBuildings,
+	}
+	if seed > 0 {
+		resetReq.Seed = &seed
+	}
+	resp := s.envMgr.Reset(resetReq)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

@@ -76,6 +76,13 @@ type ObservationModel struct {
 	HVACEfficiency      float64          `json:"hvac_efficiency"`
 	InstructionCard     *InstructionCard `json:"instruction_card,omitempty"` // populated for Task 4 only
 	ActiveFaults        []string         `json:"active_faults,omitempty"`    // human-readable alarm strings for active faults
+	TaskCard            string           `json:"task_card"`
+	NLSummary           string           `json:"nl_summary"`
+	MarketType          string           `json:"market_type"`
+	Season              string           `json:"season"`
+	PriceVolatility     float64          `json:"price_volatility"`
+	PriceForecast       []float64        `json:"price_forecast"`
+	DemandChargeActive  bool             `json:"demand_charge_active"`
 }
 
 // ActionModel is the parsed agent action for a single step.
@@ -87,18 +94,19 @@ type ActionModel struct {
 	BuildingID         int     `json:"building_id"`         // which building to act on
 }
 
-// RewardComponents holds the individual components of the dense reward signal.
 type RewardComponents struct {
-	CostSavings        float64 `json:"cost_savings"`         // negative = expensive
-	TempConstraint   float64 `json:"temp_constraint"`     // positive = within bounds
-	GridResponse    float64 `json:"grid_response"`       // bonus for DR compliance
-	DeadlinePenalty  float64 `json:"deadline_penalty"`    // negative for missed jobs
-	EfficiencyBonus float64 `json:"efficiency_bonus"`    // storage arbitrage
-	StabilityPenalty float64 `json:"stability_penalty"`   // HVAC oscillation penalty
-	CarbonReward    float64 `json:"carbon_reward"`       // low-carbon bonus
-	InstructionReward float64 `json:"instruction_reward"`  // Task 4: instruction-following score
-	FaultMitigation float64 `json:"fault_mitigation"`  // Track 3: reward for proper fault response
-	Total           float64 `json:"total"`
+	CostSavings           float64 `json:"cost_savings"`
+	TempConstraint        float64 `json:"temperature_constraint"`
+	GridResponse          float64 `json:"grid_response"`
+	DeadlinePenalty       float64 `json:"deadline_penalty"`
+	EfficiencyBonus       float64 `json:"efficiency_bonus"`
+	StabilityPenalty      float64 `json:"stability_penalty"`
+	CarbonReward          float64 `json:"carbon_reward"`
+	InstructionReward     float64 `json:"task_satisfaction"`
+	FaultMitigation       float64 `json:"fault_mitigation"`
+	PriceAnticipation     float64 `json:"price_anticipation"`
+	DemandChargePenalty   float64 `json:"demand_charge_penalty"`
+	Total                 float64 `json:"total"`
 }
 
 // StepResponse is the full HTTP body returned from POST /step.
@@ -107,6 +115,7 @@ type StepResponse struct {
 	Reward      float64          `json:"reward"`
 	Done        bool             `json:"done"`
 	Info        StepInfo         `json:"info"`
+	Rewards     RewardComponents `json:"rewards"`
 }
 
 // StepInfo carries auxiliary information per step.

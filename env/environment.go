@@ -587,6 +587,7 @@ func (e *Environment) stepBuilding(b *BuildingState, act ActionModel, idx int) S
 			Episode:          e.episode,
 			Step:             s,
 		},
+		Rewards: rc,
 	}
 }
 
@@ -692,6 +693,29 @@ func (e *Environment) buildObservation(b *BuildingState) ObservationModel {
 	// Apply sensor fault noise to observation (not physics) - if sensor fault is active, agent sees wrong temp
 	reportedTemp := b.IndoorTemperature + b.TempObservationNoise
 
+	taskCardStr := ""
+	if e.taskID == 4 && e.InstructionCard != nil {
+		taskCardStr = e.InstructionCard.Text
+	} else if e.taskID == 1 {
+		taskCardStr = "Task 1 (Easy - Cost Minimization): Minimize total energy cost over 24 hours. No temperature or batch constraints. Use cheap off-peak periods and thermal storage."
+	} else if e.taskID == 2 {
+		taskCardStr = "Task 2 (Medium - Temperature Management): Minimize cost AND keep indoor temperature within 19-23°C at all times. Balance comfort vs cost."
+	} else if e.taskID == 3 {
+		taskCardStr = "Task 3 (Hard - Full Demand Response): Minimize cost, maintain temperature, respond to grid stress (shed when grid_stress_signal > 0.7), schedule batch jobs, minimize carbon."
+	} else {
+		taskCardStr = "Maintain operations and minimize cost."
+	}
+
+	priceForecast := make([]float64, 4)
+	for i := 0; i < 4; i++ {
+		idx := b.Step + i
+		if idx < EpisodeSteps {
+			priceForecast[i] = math.Round(e.PriceCurve[idx]*10000) / 10000
+		} else {
+			priceForecast[i] = math.Round(e.PriceCurve[EpisodeSteps-1]*10000) / 10000
+		}
+	}
+
 	return ObservationModel{
 		IndoorTemperature:   math.Round(reportedTemp*100) / 100,
 		ThermalStorageLevel: math.Round(b.ThermalStorageLevel*1000) / 1000,
@@ -707,6 +731,13 @@ func (e *Environment) buildObservation(b *BuildingState) ObservationModel {
 		HVACEfficiency:      math.Round(b.HVACEfficiency*1000) / 1000,
 		InstructionCard:     e.InstructionCard,
 		ActiveFaults:        activeFaults,
+		TaskCard:            taskCardStr,
+		NLSummary:           "GridMind simulation state.",
+		MarketType:          "tou",
+		Season:              "summer",
+		PriceVolatility:     0.2,
+		PriceForecast:       priceForecast,
+		DemandChargeActive:  false,
 	}
 }
 

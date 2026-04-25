@@ -7,17 +7,50 @@
   "llm_every": 8,
   "max_steps": null,
   "task_averages": {
-    "1": 0.5482
+    "1": 0.4942,
+    "2": 0.4707,
+    "3": 0.7478,
+    "4": 0.4779
   },
-  "overall_average": 0.5482,
+  "overall_average": 0.54765,
   "all_results": [
     {
       "task_id": 1,
       "seed": 1100,
-      "total_reward": 249.22208122816207,
+      "total_reward": 251.84571448658104,
       "total_steps": 96,
-      "elapsed_sec": 1.4036986827850342,
-      "score": 0.5482,
+      "elapsed_sec": 1.227782964706421,
+      "score": 0.4942,
+      "sub_scores": {},
+      "exploit_detected": false
+    },
+    {
+      "task_id": 2,
+      "seed": 1200,
+      "total_reward": 245.38403598363988,
+      "total_steps": 96,
+      "elapsed_sec": 0.8327796459197998,
+      "score": 0.4707,
+      "sub_scores": {},
+      "exploit_detected": false
+    },
+    {
+      "task_id": 3,
+      "seed": 1300,
+      "total_reward": 242.06080137356216,
+      "total_steps": 96,
+      "elapsed_sec": 0.6833479404449463,
+      "score": 0.7478,
+      "sub_scores": {},
+      "exploit_detected": false
+    },
+    {
+      "task_id": 4,
+      "seed": 1400,
+      "total_reward": 206.4647897455665,
+      "total_steps": 96,
+      "elapsed_sec": 1.0237984657287598,
+      "score": 0.4779,
       "sub_scores": {},
       "exploit_detected": false
     }
