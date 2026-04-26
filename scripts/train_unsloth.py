@@ -687,8 +687,8 @@ def main():
         "log_completions": True,  # Enable completion metrics in table
         "num_completions_to_print": 1,  # Print 1 completion per step
         "save_steps": 100,
-        "fp16": not use_bf16,
-        "bf16": use_bf16,
+        "fp16": False,  # Disable AMP with quantized models (avoid grad scaler issues)
+        "bf16": False,
         "max_grad_norm": 0.0,
         "report_to": "none",
         "seed": 42,
