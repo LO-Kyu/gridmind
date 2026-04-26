@@ -269,10 +269,9 @@ gridmind-rl/
 ## Links
 
 - 🤗 HuggingFace Space: [GridMind-RL](https://prajwal782007-gridmind.hf.space)
-- 📝 Blog Post: [GridMind-RL: Training LLMs on Industrial Energy Management](https://huggingface.co/blog/gridmind-rl)
-- 🎥 Demo Video: [YouTube Walkthrough](https://www.youtube.com/watch?v=dummy)
-- 📊 Training Run: [gridmind_grpo_colab.ipynb](https://colab.research.google.com/)
-- GitHub: [https://github.com/LO-Kyu/gridmind](https://github.com/LO-Kyu/gridmind)
+- 📝 Blog: [Read the blog post](./HF_BLOG_POST.md)
+- 📓 Colab Notebook: [gridmind_grpo_colab.ipynb](https://colab.research.google.com/github/LO-Kyu/gridmind/blob/main/scripts/gridmind_grpo_colab.ipynb)
+- 🐙 Code Repository: [GitHub](https://github.com/LO-Kyu/gridmind)
 
 ---
 
