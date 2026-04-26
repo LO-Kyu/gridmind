@@ -682,7 +682,9 @@ def main():
         "learning_rate": 5e-6,  # FIXED: was 5e-5, too high
         "lr_scheduler_type": "cosine",
         "warmup_ratio": 0.1,
-        "logging_steps": 5,
+        "logging_steps": 1,  # Log every step to produce dense table
+        "log_completions": True,  # Enable completion metrics in table
+        "num_completions_to_print": 1,  # Print 1 completion per step
         "save_steps": 100,
         "fp16": not use_bf16,
         "bf16": use_bf16,
