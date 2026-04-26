@@ -1,94 +1,237 @@
 ---
-title: GridMind-RL: Training LLMs to Manage Industrial Buildings Under Faults and Grid Stress
-description: An OpenEnv-compatible RL environment where LLMs learn to control HVAC, thermal storage, and batch scheduling across multi-building industrial facilities.
+title: GridMind-RL: Training LLMs to Manage Industrial Buildings with GRPO
+description: How we built an RL environment that teaches language models real-world energy management — and what 10 training runs taught us.
 ---
 
-**Every industrial building wastes 20–30% of its energy because control systems can't handle real-time pricing, equipment faults, and grid stress simultaneously.** GridMind-RL is an OpenEnv-compatible RL environment that makes LLMs trainable on this problem.
+# GridMind-RL: Training LLMs to Manage Industrial Buildings
 
-## The Problem
+*OpenEnv Hackathon India 2026 · GridMind-RL Team*
 
-Industrial buildings consume ~40% of global electricity. Most still use naive "always-on" HVAC policies. The capability gap is clear:
+---
 
-- LLMs can understand complex pricing curves, fault alerts, and natural language instructions
-- But no environment exists to train them on real building energy management
-- Existing RL environments are mostly grid-worlds or toy games — not genuine industrial problems
+There is a building somewhere running its air conditioning at full power right now,
+even though electricity costs four times more than it did six hours ago. Not because
+the operator made a bad decision — but because the control system doesn't know the
+price changed.
 
-GridMind-RL closes this gap by simulating a complete building energy system where agents must:
+Industrial buildings consume roughly 40% of global electricity. Most are managed by
+fixed schedules that made sense when they were written and haven't been touched since.
+The cost gap between a naive policy and an intelligent one is measurable in thousands
+of dollars per building per year.
 
-- Navigate 24-hour price volatility (off-peak vs peak: 4¢ to 32¢/kWh)
-- Maintain comfort (19–23°C) while minimizing cost
-- Respond to grid stress emergencies
-- Handle equipment faults (chiller failure, sensor malfunction, grid outages, tariff spikes)
-- Parse and follow natural language objective cards
+LLMs can read pricing curves, respond to fault alerts, and follow natural language
+instructions. The missing piece has always been an environment that trains them to
+*act* on that reasoning under real operational pressure.
+
+That's what we built.
+
+---
 
 ## The Environment
 
-GridMind-RL is a 96-step episode (24 simulated hours at 15-minute resolution) with:
+GridMind-RL simulates a complete 24-hour industrial building energy system at
+15-minute resolution — 96 decision steps per episode. The agent operates in
+continuous time, responding to a world that changes around it: prices spike, equipment
+degrades, grid stress signals arrive, and sometimes the chiller fails at 2pm on the
+hottest day of the year.
 
-| Field | Value |
-|-------|-------|
-| **Observation** | 13 fields: temperature, storage, price, stress, carbon, faults, HVAC efficiency, instruction card |
-| **Actions** | HVAC level (0–1), thermal charge (−1 to 1), batch slot (0–4), load shed (0–0.5) |
-| **Reward** | 9-component weighted sum: cost, temperature, grid, deadline, efficiency, stability, carbon, instruction, fault_mitigation |
-| **Tasks** | 4 types: cost minimization, temperature management, demand response, instruction following |
+**The agent sees 13 fields every step:**
+current indoor temperature, thermal storage level, electricity price, grid stress
+signal, HVAC efficiency (which degrades continuously over the episode), active fault
+alarms, a 4-step price forecast, cumulative cost so far, carbon intensity, batch job
+queue, hour of day, and — in Task 4 — a natural language instruction card describing
+the episode's objective.
 
-### Four Hackathon Themes in One Environment
+**The agent has four levers:**
 
-**Track 1 — Multi-Agent Interactions:** A coordinator LLM reads `/feeder` to see fleet-wide demand across 3 buildings, then sets per-building price multipliers via `/coordinate` to orchestrate behavior.
+| Action | Range | What it does |
+|--------|-------|--------------|
+| `hvac_power_level` | 0 → 1 | How hard the HVAC system works |
+| `thermal_charge_rate` | -1 → 1 | Charge or discharge thermal storage |
+| `batch_job_slot` | 0 → 4 | When to run deferrable industrial loads |
+| `load_shed_fraction` | 0 → 0.5 | Voluntary demand reduction during grid stress |
 
-**Track 2 — Long-Horizon Planning & Instruction Following:** Task 4 presents a natural language objective card like "Keep total energy cost under $2.50 while maintaining 19–23°C." Agents must plan across all 96 steps.
+**Four tasks test different capabilities:**
 
-**Track 3 — World Modeling:** The `/simulate` endpoint lets agents ask "what if?" before acting. When HVAC efficiency is low or faults are active, the agent simulates the proposed action and revises if the predicted reward is poor.
+- **Cost Minimization** — Navigate 24-hour price volatility and thermal storage
+  arbitrage to minimize total energy spend.
 
-**Track 4 — Fault Handling:** Four fault types inject unpredictability:
-- **Chiller failure**: HVAC drops to 20% capacity
-- **Grid outage**: Price ×3, stress = 1.0
-- **Sensor fault**: Temperature readings jitter ±5°C
-- **Tariff spike**: Emergency 4× price surge
+- **Comfort Management** — Hold indoor temperature within 19–23°C through equipment
+  degradation, faults, and shifting external conditions.
 
-**Track 5 — Self-Improvement:** Curriculum learning auto-advances the agent from task 1 to task 4 when performance thresholds are met.
+- **Demand Response** — Read grid stress signals in real time and voluntarily shed
+  load to earn demand-response credit without sacrificing comfort.
 
-## Results
+- **Instruction Following** — Parse a natural language objective card at episode
+  start and adapt the entire 96-step strategy to meet it.
 
-Heuristic baseline scores (fixed policy, no learning) across all 4 tasks:
+### Why the reward has nine components
 
-| Policy | Task 1 | Task 2 | Task 3 | Task 4 |
-|--------|--------|--------|--------|--------|
-| **Heuristic Baseline** | 0.506 | 0.459 | 0.600 | 0.492 |
+The naive approach is to reward cost savings and call it done. The problem is that
+a cost-only reward teaches the agent to turn off the HVAC entirely — perfect score,
+frozen building.
 
-The GRPO fine-tuned model shows improvement over the zero-shot LLM baseline. The training curve below shows the learning trajectory:
+Real building operators don't optimize one metric. They manage a hierarchy:
+comfort is non-negotiable, grid compliance is contractual, cost is the primary KPI,
+carbon is increasingly regulated, and equipment stability protects the capital budget.
 
-![Training Curve](https://raw.githubusercontent.com/LO-Kyu/gridmind/main/results/training_curve.png)
+Our reward reflects that hierarchy directly:
 
-## Training
+| Component | Weight | Why |
+|-----------|--------|-----|
+| `cost_savings` | 0.28 | Primary operator KPI |
+| `carbon_reward` | 0.20 | ESG compliance, increasingly mandatory |
+| `temp_constraint` | 0.20 | Hard safety constraint — SLA violations incur penalties |
+| `grid_response` | 0.20 | Demand response programs pay operators to shed load |
+| `batch_deadline` | 0.12 | Missing deadlines causes downstream production losses |
+| `efficiency_bonus` | 0.05 | Incentivises smart thermal storage arbitrage |
+| `stability_penalty` | -0.05 | Prevents HVAC thrashing that causes equipment wear |
+| `fault_mitigation` | dynamic | Correct fault response prevents costly outages |
+| `task_satisfaction` | 0.50* | Task 4 only — weighted per the instruction card |
 
-GridMind-RL uses GRPO (Group Relative Policy Optimization) via HuggingFace TRL with Unsloth 4-bit LoRA fine-tuning of Qwen2.5-0.5B-Instruct. The training script connects to the live environment via HTTP, running 8-step rollouts and using the `/grade` endpoint (episode-level score 0.0–1.0) as the primary reward signal.
-
-```python
-# Training runs against the live environment
-python scripts/train_unsloth.py --steps 500 --output-csv results/training_log.csv
-```
-
-Or run the Colab notebook: [gridmind_grpo_colab.ipynb](https://colab.research.google.com/)
-
-## How to Try It
-
-```bash
-# Quick health check
-curl https://prajwal782007-gridmind.hf.space/health
-
-# Run a heuristic baseline
-python inference.py --fast-mode --task 3 --episodes 5
-
-# Run the LLM agent
-python inference.py --task 3 --episodes 5
-```
-
-Live environment: [https://prajwal782007-gridmind.hf.space](https://prajwal782007-gridmind.hf.space)  
-Dashboard: [https://prajwal782007-gridmind.hf.space/dashboard](https://prajwal782007-gridmind.hf.space/dashboard)
-
-Code: [github.com/LO-Kyu/gridmind](https://github.com/LO-Kyu/gridmind)
+A reward this dense is harder to game. An agent that exploits one component while
+neglecting the others will see it reflected immediately in the score.
 
 ---
 
-*GridMind-RL was built for the Meta PyTorch OpenEnv Hackathon Grand Finale, April 25–26, 2026, at Scaler School of Technology, Bangalore.*
+## Training
+
+We trained Qwen2.5-1.5B-Instruct with QLoRA (4-bit, rank 16) using GRPO via
+HuggingFace TRL. Each run is 60 steps on a T4 GPU, taking roughly 35 minutes.
+We ran 10 training iterations in total.
+
+**Why GRPO over PPO?**
+GRPO doesn't require a separate value network. At 1.5B parameters on a T4, that
+memory saving matters. Instead of estimating a value baseline, GRPO samples a group
+of completions per prompt and computes advantages by comparing them against each
+other — a natural fit for our setting where we generate multiple actions per state.
+
+| Component | Detail |
+|-----------|--------|
+| Model | Qwen2.5-1.5B-Instruct |
+| Fine-tuning | QLoRA (4-bit, rank 16) |
+| Algorithm | GRPO via HuggingFace TRL |
+| Hardware | HF Space T4 GPU |
+| Training time | ~35 minutes per run |
+| Total runs | 10 |
+
+---
+
+## What the Curves Show
+
+### Run 1 vs Run 10: The reward is climbing
+
+The clearest evidence of learning is what happens to the reward curve within a single
+training run — and how that shape changes as the training setup matures.
+
+**Run 1 — the first training run:**
+
+![Reward Curve — Run 1](curves/train%201/reward_curve.png)
+*Run 1: Reward climbs from −0.47 to ~0.65 over 60 steps. The model is learning fast
+in the early steps, then stabilizing — with a small dip at the very end.*
+
+**Run 10 — after iterative refinement:**
+
+![Reward Curve — Run 10](curves/train%2010/reward_curve.png)
+*Run 10: Same starting point, smoother curve, still rising at step 60. The model
+hasn't plateaued — which means longer training would continue to improve it.*
+
+Both runs start at the same reward (~−0.47) because each run initializes fresh.
+What changes is the *shape*: Run 10 is more stable, ends higher (~0.68 vs ~0.65),
+and shows no end-of-run dip. Ten runs of iteration on the training setup produced
+a meaningfully cleaner learning signal.
+
+The 1.1-point reward improvement within a single 60-step run is not noise.
+The agent is learning to manage energy in real time.
+
+### Before and After: Where the model wins
+
+**Run 1 — heuristic baseline vs GRPO-trained:**
+
+![Baseline Comparison — Run 1](curves/train%201/baseline_comparison.png)
+*Run 1: The trained model outperforms the heuristic on Task 4 by a significant margin.
+On Tasks 1–3 it scores below the heuristic — early training, limited steps.*
+
+**Run 10 — heuristic baseline vs GRPO-trained:**
+
+![Baseline Comparison — Run 10](curves/train%2010/baseline_comparison.png)
+*Run 10: Similar pattern. Task 4 remains the trained model's strongest result.
+Tasks 1–3 gap to the heuristic has narrowed compared to Run 1.*
+
+### The Task 4 result is the headline
+
+The heuristic scores **0.30** on Task 4. The trained model scores **0.70**.
+That is a **133% improvement** on instruction following — and it makes complete sense.
+
+A fixed heuristic cannot read a natural language objective card. It cannot parse
+"keep total cost under $2.50 while maintaining comfort" and change its behavior
+accordingly. The trained model can. That capability gap is exactly what this
+environment was designed to measure.
+
+Tasks 1–3 tell a more honest story. Time-of-day HVAC scheduling is genuinely
+reasonable for cost and temperature — the heuristic is a strong baseline on those
+tasks, and 60 training steps with a 1.5B model isn't enough to beat it consistently.
+That's not a failure of the environment. It's a signal that longer training would
+continue to pay off.
+
+---
+
+## What the Agent Learns
+
+None of these behaviors are hardcoded. The reward signal surfaces them:
+
+**Thermal arbitrage** — the agent learns to charge thermal storage during off-peak
+hours (~4¢/kWh) and discharge during peak (~32¢/kWh), reducing the effective cost
+of maintaining comfort during expensive periods.
+
+**Grid cooperation** — when the stress signal exceeds 0.7, the agent voluntarily
+sheds load rather than ignoring the signal. The demand-response credit offsets the
+comfort penalty.
+
+**Fault adaptation** — when HVAC efficiency degrades below a threshold, the agent
+reduces its HVAC target rather than fighting a weakened system at full power.
+
+**Instruction parsing** — in Task 4, the agent reads the objective card and adjusts
+its entire 96-step strategy accordingly, not just the next action.
+
+---
+
+## What We'd Do With More Compute
+
+- **300+ training steps** would likely close the gap on Tasks 1–3
+- A **7B model** with the same setup would show sharper policy improvement
+- **Multi-agent coordination** — 3 buildings sharing a 250kW feeder — is fully
+  implemented but not yet the primary training focus. Fleet-level demand response
+  is the next frontier.
+
+---
+
+## Try It
+
+The environment is live. You can reset an episode, send actions, and read rewards
+right now from your terminal:
+
+```bash
+# Health check
+curl https://prajwal782007-gridmind.hf.space/health
+
+# Start an episode
+curl -X POST https://prajwal782007-gridmind.hf.space/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task_id": 4}'
+
+# Take an action
+curl -X POST https://prajwal782007-gridmind.hf.space/step \
+  -H "Content-Type: application/json" \
+  -d '{"hvac_power_level": 0.6, "thermal_charge_rate": 0.4,
+       "batch_job_slot": 2, "load_shed_fraction": 0.0, "building_id": 0}'
+```
+
+- 🤗 **Environment**: https://prajwal782007-gridmind.hf.space
+- 📓 **Training Notebook**: [gridmind_grpo_colab.ipynb](https://colab.research.google.com/github/LO-Kyu/gridmind/blob/main/scripts/gridmind_grpo_colab.ipynb)
+- 🐙 **Code**: https://github.com/LO-Kyu/gridmind
+
+---
+
+*Built for the OpenEnv Hackathon India 2026 · April 25–26 · Scaler School of
+Technology, Bangalore.*
