@@ -213,7 +213,6 @@ POST /step {action}    → take action</pre>
 <h3>📚 Links</h3>
 <ul>
   <li><a href="https://github.com/LO-Kyu/gridmind" target="_blank" rel="noopener noreferrer">GitHub Repository</a></li>
-  <li><a href="https://openenv.org">OpenEnv Specification</a></li>
 </ul>
 </body>
 </html>`
