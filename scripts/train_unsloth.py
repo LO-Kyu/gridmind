@@ -642,7 +642,8 @@ def main():
     print(f"🚀 Loading model: {args.model_name}")
     max_seq_length = 512
     lora_rank = 8
-    use_bf16 = bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+    # Force FP16 on T4 (BFloat16 not fully supported for AMP gradient scaling)
+    use_bf16 = False
     
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_name,
