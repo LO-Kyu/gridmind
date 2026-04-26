@@ -33,7 +33,7 @@ import matplotlib.gridspec as gridspec
 from datasets import Dataset
 from trl import GRPOTrainer, GRPOConfig
 from unsloth import FastLanguageModel
-from transformers import TrainerCallback
+from transformers import PrinterCallback, TrainerCallback
 
 os.makedirs("results", exist_ok=True)
 
@@ -65,69 +65,39 @@ def make_prompt(i):
     }]
 
 
-def reward_valid_json(completions, **kwargs):
-    rewards = []
-    for completion in completions:
-        text = completion[0]["content"] if isinstance(completion, list) else completion
-        try:
-            match = re.search(r'\{.*?\}', text, re.DOTALL)
-            if match:
-                json.loads(match.group())
-                rewards.append(0.3)
-            else:
-                rewards.append(0.0)
-        except Exception:
-            rewards.append(0.0)
-    return rewards
-
-
-def reward_has_required_keys(completions, **kwargs):
-    required = {"hvac_power_level", "thermal_charge_rate", "batch_job_slot", "load_shed_fraction"}
-    rewards = []
-    for completion in completions:
-        text = completion[0]["content"] if isinstance(completion, list) else completion
-        try:
-            match = re.search(r'\{.*?\}', text, re.DOTALL)
-            if match:
-                action = json.loads(match.group())
-                if required.issubset(action.keys()):
-                    rewards.append(0.3)
-                else:
-                    rewards.append(0.1)
-            else:
-                rewards.append(0.0)
-        except Exception:
-            rewards.append(0.0)
-    return rewards
-
-
 ENV_URL = "https://prajwal782007-gridmind.hf.space"
 
 
 class GridMindRewardFn:
-    """Fixed reward function with environment reset per completion call."""
+    """Environment-backed reward function with comparable rollouts per GRPO group."""
     
-    def __init__(self, env_url, num_steps=8):
+    def __init__(self, env_url, num_steps=8, num_generations=4):
         self.env_url = env_url
         self.num_steps = num_steps
+        self.num_generations = max(1, num_generations)
         self.call_count = [0]
         self.reward_variance_log = []
         self.training_rewards = []
+        self.group_count = 0
     
     def __call__(self, completions, **kwargs):
         rewards = []
         batch_rewards = []
         
+        batch_start = self.group_count
         for i, completion in enumerate(completions):
             self.call_count[0] += 1
+            group_id = batch_start + (i // self.num_generations)
             
             text = completion[0]["content"] if isinstance(completion, list) else completion
             
             try:
                 match = re.search(r'\{.*?\}', text, re.DOTALL)
                 if not match:
-                    rewards.append(-1.0)
-                    batch_rewards.append(-1.0)
+                    final_reward = -1.0
+                    rewards.append(final_reward)
+                    batch_rewards.append(final_reward)
+                    self.training_rewards.append(final_reward)
                     continue
                 
                 action = json.loads(match.group())
@@ -140,8 +110,10 @@ class GridMindRewardFn:
                     "building_id": 0
                 }
                 
-                seed = 1000 + self.call_count[0]
-                task_id = (self.call_count[0] % 3) + 1
+                # Evaluate all generations for the same prompt on the same scenario.
+                # This keeps GRPO advantages tied to action quality instead of seed noise.
+                seed = 10_000 + group_id
+                task_id = (group_id % 4) + 1
                 
                 reset_resp = requests.post(
                     f"{self.env_url}/reset",
@@ -149,11 +121,14 @@ class GridMindRewardFn:
                     timeout=30
                 )
                 if reset_resp.status_code != 200:
-                    rewards.append(-0.5)
-                    batch_rewards.append(-0.5)
+                    final_reward = -0.5
+                    rewards.append(final_reward)
+                    batch_rewards.append(final_reward)
+                    self.training_rewards.append(final_reward)
                     continue
                 
                 total_reward = 0.0
+                completed_steps = 0
                 for _ in range(self.num_steps):
                     step_resp = requests.post(
                         f"{self.env_url}/step",
@@ -166,36 +141,39 @@ class GridMindRewardFn:
                     if isinstance(step_data, list):
                         step_data = step_data[0]
                     total_reward += float(step_data.get("reward", 0))
+                    completed_steps += 1
                 
-                avg_reward = total_reward / self.num_steps if self.num_steps > 0 else 0
+                avg_step_reward = total_reward / max(completed_steps, 1)
+                normalized_step_reward = max(-1.0, min(1.0, avg_step_reward / 10.0))
                 
                 grade_resp = requests.get(f"{self.env_url}/grade", timeout=30)
                 if grade_resp.status_code == 200:
                     episode_score = float(grade_resp.json().get("score", 0.5))
-                    normalized = max(0.0, min(1.0, (episode_score - 0.4) / 0.32))
-                    final_reward = normalized
+                    normalized_grade = max(0.0, min(1.0, episode_score))
+                    final_reward = 0.7 * normalized_grade + 0.3 * normalized_step_reward
                 else:
-                    final_reward = max(-1.0, min(1.0, avg_reward / 10.0))
+                    final_reward = normalized_step_reward
                 
                 rewards.append(final_reward)
                 batch_rewards.append(final_reward)
                 self.training_rewards.append(final_reward)
                 
             except json.JSONDecodeError:
-                rewards.append(-0.8)
-                batch_rewards.append(-0.8)
+                final_reward = -0.8
+                rewards.append(final_reward)
+                batch_rewards.append(final_reward)
+                self.training_rewards.append(final_reward)
             except Exception as e:
                 print(f"Reward error: {e}", file=sys.stderr)
-                rewards.append(-0.5)
-                batch_rewards.append(-0.5)
+                final_reward = -0.5
+                rewards.append(final_reward)
+                batch_rewards.append(final_reward)
+                self.training_rewards.append(final_reward)
         
-        if len(batch_rewards) > 1 and self.call_count[0] % 10 == 0:
-            try:
-                variance = np.var(batch_rewards)
-                print(f"  [Step {self.call_count[0]}] Reward variance: {variance:.4f} | Avg: {np.mean(batch_rewards):.3f}")
-                self.reward_variance_log.append(variance)
-            except:
-                pass
+        self.group_count += math.ceil(len(completions) / self.num_generations)
+        
+        if len(batch_rewards) > 1:
+            self.reward_variance_log.append(float(np.var(batch_rewards)))
         
         return rewards
 
@@ -627,6 +605,85 @@ class CSVLogCallback(TrainerCallback):
             pd.DataFrame(self.log_history).to_csv(self.output_path, index=False)
 
 
+class MetricsTableCallback(TrainerCallback):
+    """Print compact GRPO metrics without dumping prompts or completions."""
+
+    columns = [
+        ("step", "Step", 6),
+        ("loss", "Loss", 10),
+        ("reward", "Reward", 10),
+        ("reward_std", "RewardStd", 10),
+        ("entropy", "Entropy", 10),
+        ("learning_rate", "LR", 11),
+        ("num_tokens", "Tokens", 8),
+        ("step_time", "StepTime", 10),
+    ]
+
+    def __init__(self):
+        self.header_printed = False
+        self.rewards = []
+
+    def _format_value(self, key, value):
+        if value is None:
+            return "-"
+        try:
+            if key in {"step", "num_tokens"}:
+                return str(int(float(value)))
+            if key == "learning_rate":
+                return f"{float(value):.2e}"
+            return f"{float(value):.4f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _print_header(self):
+        separator = "+" + "+".join("-" * (width + 2) for _, _, width in self.columns) + "+"
+        header = "|" + "|".join(f" {title:<{width}} " for _, title, width in self.columns) + "|"
+        print(separator)
+        print(header)
+        print(separator)
+        self.header_printed = True
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs or ("loss" not in logs and "reward" not in logs):
+            return
+        if not self.header_printed:
+            self._print_header()
+
+        row_values = []
+        for key, _, width in self.columns:
+            value = state.global_step if key == "step" else logs.get(key)
+            row_values.append(f" {self._format_value(key, value):>{width}} ")
+        print("|" + "|".join(row_values) + "|")
+
+        if "reward" in logs:
+            try:
+                self.rewards.append(float(logs["reward"]))
+            except (TypeError, ValueError):
+                pass
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if not self.rewards:
+            return
+
+        first_window = self.rewards[: min(5, len(self.rewards))]
+        last_window = self.rewards[-min(5, len(self.rewards)) :]
+        first_avg = float(np.mean(first_window))
+        last_avg = float(np.mean(last_window))
+        overall_avg = float(np.mean(self.rewards))
+        best_reward = float(np.max(self.rewards))
+
+        print("+----------------------+------------+")
+        print("| Reward Summary       | Value      |")
+        print("+----------------------+------------+")
+        print(f"| Logged rows          | {len(self.rewards):>10} |")
+        print(f"| First rows avg       | {first_avg:>+10.4f} |")
+        print(f"| Last rows avg        | {last_avg:>+10.4f} |")
+        print(f"| Improvement          | {last_avg - first_avg:>+10.4f} |")
+        print(f"| Overall avg          | {overall_avg:>+10.4f} |")
+        print(f"| Best row reward      | {best_reward:>+10.4f} |")
+        print("+----------------------+------------+")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train GridMind-RL agent with Unsloth GRPO")
     parser.add_argument("--env-url", type=str, default="http://localhost:7860", help="OpenEnv server URL")
@@ -683,9 +740,8 @@ def main():
         "learning_rate": 5e-6,  # FIXED: was 5e-5, too high
         "lr_scheduler_type": "cosine",
         "warmup_ratio": 0.1,
-        "logging_steps": 1,  # Log every step to produce dense table
-        "log_completions": True,  # Enable completion metrics in table
-        "num_completions_to_print": 1,  # Print 1 completion per step
+        "logging_steps": 5,  # Keep 60-step output clean: rows at 5, 10, ..., 60
+        "log_completions": False,
         "save_steps": 100,
         "fp16": False,  # Disable AMP with quantized models (avoid grad scaler issues)
         "bf16": False,
@@ -708,20 +764,21 @@ def main():
         print(f"Skipping unsupported GRPOConfig args: {skipped_training_args}")
     training_args = GRPOConfig(**training_arg_kwargs)
     
-    reward_fn = GridMindRewardFn(args.env_url, num_steps=8)
+    reward_fn = GridMindRewardFn(
+        args.env_url,
+        num_steps=8,
+        num_generations=requested_training_args["num_generations"],
+    )
     
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
         args=training_args,
         train_dataset=dataset,
-        reward_funcs=[
-            reward_valid_json,
-            reward_has_required_keys,
-            reward_fn,
-        ],
-        callbacks=[CSVLogCallback(args.output_csv)]
+        reward_funcs=[reward_fn],
+        callbacks=[CSVLogCallback(args.output_csv), MetricsTableCallback()]
     )
+    trainer.remove_callback(PrinterCallback)
     
     print("🚀 Starting GRPO training...")
     trainer.train()
