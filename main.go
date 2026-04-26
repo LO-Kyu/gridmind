@@ -197,6 +197,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
   <li><a href="/health">→ API Health Check</a></li>
   <li><a href="/tasks">→ Available Tasks</a></li>
   <li><a href="/metrics">→ Prometheus Metrics</a></li>
+  <li><a href="https://colab.research.google.com/github/LO-Kyu/gridmind/blob/main/scripts/gridmind_grpo_colab.ipynb">→ Google Colab</a></li>
 </ul>
 <h3>📡 API Endpoints</h3>
 <pre>GET  /health           → health check
